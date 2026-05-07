@@ -27,6 +27,14 @@ router.post('/lock',
   promosiCtrl.lockPromosi
 );
 
+// POST /api/promosi/unlock
+// Membatalkan kunci agar Wali Kelas bisa mengubah keputusan kenaikan
+router.post('/unlock',
+  authorizeRoles('Wali Kelas', 'Guru Mapel', 'Administrator'),
+  requireFields('rombelId'),
+  promosiCtrl.unlockPromosi
+);
+
 // POST /api/promosi/execute
 // Accessible by Kurikulum (to execute migration)
 router.post('/execute', 
