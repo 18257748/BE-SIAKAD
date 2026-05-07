@@ -172,12 +172,6 @@ const authenticateDecodedUser = async (req, res, next, decoded, source) => {
   return next();
 };
 
-/**
- * Middleware: Verify Supabase JWT access token.
- *
- * Fallback legacy JWT is only used when SUPABASE_JWT_SECRET is not configured,
- * so existing local development/test flows do not break before Supabase env is set.
- */
 const authenticateSupabaseUser = async (req, res, next) => {
   const token = getBearerToken(req);
 
@@ -186,22 +180,34 @@ const authenticateSupabaseUser = async (req, res, next) => {
   }
 
   try {
-    if (process.env.AUTH_MODE !== 'local-bcrypt' && process.env.SUPABASE_JWT_SECRET) {
-      const decoded = verifyJwtWithSecret(token, process.env.SUPABASE_JWT_SECRET);
-      return await authenticateDecodedUser(req, res, next, decoded, 'supabase');
+    let decoded = null;
+    let source = null;
+
+    // 1. Try decoding with SUPABASE_JWT_SECRET first if configured
+    if (process.env.SUPABASE_JWT_SECRET) {
+      try {
+        decoded = verifyJwtWithSecret(token, process.env.SUPABASE_JWT_SECRET);
+        source = 'supabase';
+      } catch (err) {
+        // Ignore error, will fall back to local JWT
+      }
     }
 
-    const decoded = verifyJwtWithSecret(token, process.env.JWT_SECRET);
+    // 2. Fallback to local JWT_SECRET if Supabase decoding failed or wasn't configured
+    if (!decoded && process.env.JWT_SECRET) {
+      try {
+        decoded = verifyJwtWithSecret(token, process.env.JWT_SECRET);
+        source = 'legacy';
+      } catch (err) {
+        // Ignore, handled by the generic throw below
+      }
+    }
+
     if (!decoded) {
-      return sendAuthError(
-        res,
-        500,
-        'Konfigurasi autentikasi server belum lengkap',
-        'AUTH_CONFIG_MISSING'
-      );
+      throw new Error('Token verification failed for all available secrets');
     }
 
-    return await authenticateDecodedUser(req, res, next, decoded, 'legacy');
+    return await authenticateDecodedUser(req, res, next, decoded, source);
   } catch (error) {
     return sendAuthError(
       res,
