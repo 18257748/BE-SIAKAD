@@ -91,13 +91,21 @@ const toggleActive = async (req, res) => {
 
     const newActive = !existing.is_active;
 
-    if (newActive) {
-      await prisma.tahunAjaran.updateMany({ data: { is_active: false } });
-    }
+    const data = await prisma.$transaction(async (tx) => {
+      if (newActive) {
+        await tx.tahunAjaran.updateMany({ data: { is_active: false } });
+        await tx.semester.updateMany({ data: { is_active: false } });
+      } else {
+        await tx.semester.updateMany({
+          where: { tahun_ajaran_id: req.params.id },
+          data: { is_active: false },
+        });
+      }
 
-    const data = await prisma.tahunAjaran.update({
-      where: { id: req.params.id },
-      data: { is_active: newActive },
+      return tx.tahunAjaran.update({
+        where: { id: req.params.id },
+        data: { is_active: newActive },
+      });
     });
 
     return res.status(200).json({
@@ -106,6 +114,62 @@ const toggleActive = async (req, res) => {
     });
   } catch (error) {
     console.error('TahunAjaran Toggle Error:', error);
+    return res.status(500).json({ message: 'Terjadi kesalahan internal pada server' });
+  }
+};
+
+const generateRombel = async (req, res) => {
+  try {
+    const tahunAjaranId = req.params.id;
+
+    const tahunAjaran = await prisma.tahunAjaran.findUnique({
+      where: { id: tahunAjaranId },
+      select: { id: true, kode: true, deskripsi: true, is_active: true },
+    });
+
+    if (!tahunAjaran) {
+      return res.status(404).json({ message: 'Tahun ajaran tidak ditemukan' });
+    }
+
+    const [masterKelasList, existingRombel] = await Promise.all([
+      prisma.masterKelas.findMany({
+        select: { id: true, nama: true },
+        orderBy: { nama: 'asc' },
+      }),
+      prisma.rombel.findMany({
+        where: { tahun_ajaran_id: tahunAjaranId },
+        select: { master_kelas_id: true },
+      }),
+    ]);
+
+    const existingMasterKelasIds = new Set(existingRombel.map((item) => item.master_kelas_id));
+    const missingMasterKelas = masterKelasList.filter((kelas) => !existingMasterKelasIds.has(kelas.id));
+
+    let createdCount = 0;
+    if (missingMasterKelas.length > 0) {
+      const result = await prisma.rombel.createMany({
+        data: missingMasterKelas.map((kelas) => ({
+          master_kelas_id: kelas.id,
+          tahun_ajaran_id: tahunAjaranId,
+          wali_kelas_id: null,
+          ruang_kelas_id: null,
+        })),
+        skipDuplicates: true,
+      });
+      createdCount = result.count;
+    }
+
+    return res.status(200).json({
+      message: 'Generate rombel berhasil',
+      data: {
+        tahunAjaranId: tahunAjaran.id,
+        tahunAjaranCode: tahunAjaran.kode,
+        totalMasterKelas: masterKelasList.length,
+        rombelDibuat: createdCount,
+      },
+    });
+  } catch (error) {
+    console.error('TahunAjaran GenerateRombel Error:', error);
     return res.status(500).json({ message: 'Terjadi kesalahan internal pada server' });
   }
 };
@@ -120,4 +184,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { getAll, create, update, toggleActive, remove };
+module.exports = { getAll, create, update, toggleActive, remove, generateRombel };

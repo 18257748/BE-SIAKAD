@@ -8,9 +8,21 @@ const prisma = require('../config/prisma');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const csv = require('csv-parser');
 const XLSX = require('xlsx');
 const { generateTemporaryPassword, hashPassword } = require('../utils/authSecurity');
+
+// ─── Whitelist ekstensi dan MIME type yang diizinkan untuk upload import ───
+const ALLOWED_EXTENSIONS = ['.csv', '.xls', '.xlsx'];
+const ALLOWED_MIMETYPES = [
+  'text/csv',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  // Beberapa browser/OS mengirim octet-stream untuk Excel;
+  // dibiarkan di whitelist MIME hanya jika ekstensi juga lolos (kondisi AND).
+  'application/octet-stream',
+];
 
 // Multer for import files
 const IMPORT_DIR = path.join(__dirname, '../../uploads/imports');
@@ -21,23 +33,32 @@ if (!fs.existsSync(IMPORT_DIR)) {
 const importStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, IMPORT_DIR),
   filename: (req, file, cb) => {
-    cb(null, `import-${Date.now()}${path.extname(file.originalname)}`);
+    // Ambil ekstensi dari whitelist, bukan dari originalname, untuk mencegah
+    // path traversal atau ekstensi berbahaya terselip di nama file.
+    const rawExt = path.extname(file.originalname).toLowerCase();
+    const safeExt = ALLOWED_EXTENSIONS.includes(rawExt) ? rawExt : '.bin';
+    const randomHex = crypto.randomBytes(8).toString('hex');
+    cb(null, `import-${Date.now()}-${randomHex}${safeExt}`);
   },
 });
 
 const importFileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    'text/csv',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ];
-  const allowedExts = ['.csv', '.xls', '.xlsx'];
   const ext = path.extname(file.originalname).toLowerCase();
+  const isExtAllowed = ALLOWED_EXTENSIONS.includes(ext);
+  // application/octet-stream kadang dikirim browser untuk file Excel;
+  // kondisi AND memastikan ext TETAP harus lolos whitelist.
+  const isMimeAllowed = ALLOWED_MIMETYPES.includes(file.mimetype);
 
-  if (allowedTypes.includes(file.mimetype) || allowedExts.includes(ext)) {
+  if (isExtAllowed && isMimeAllowed) {
     cb(null, true);
   } else {
-    cb(new Error('Format file tidak didukung. Gunakan CSV atau Excel (.xlsx, .xls).'), false);
+    cb(
+      new Error(
+        `Format file tidak didukung (ext: ${ext || '-'}, mime: ${file.mimetype || '-'}). ` +
+        'Gunakan CSV atau Excel (.csv, .xlsx, .xls).'
+      ),
+      false
+    );
   }
 };
 
@@ -172,7 +193,9 @@ const importUsers = async (req, res) => {
     }
 
     filePath = req.file.path;
-    const ext = path.extname(req.file.originalname).toLowerCase();
+    // Gunakan ekstensi dari filename yang sudah aman (bukan dari originalname)
+    // agar deteksi format konsisten dengan validasi di importStorage.
+    const ext = path.extname(req.file.filename).toLowerCase();
 
     // Parse file
     let records;

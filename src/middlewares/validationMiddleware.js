@@ -105,6 +105,7 @@ const validateNilaiRange = (req, res, next) => {
 const validateBobotTotal = (req, res, next) => {
   const { bobot } = req.body;
   if (bobot) {
+    const EPSILON = 0.001;
     const total =
       (parseFloat(bobot.tugas) || 0) +
       (parseFloat(bobot.uh) || 0) +
@@ -113,9 +114,9 @@ const validateBobotTotal = (req, res, next) => {
       (parseFloat(bobot.keaktifan) || 0) +
       (parseFloat(bobot.kehadiran) || 0);
 
-    if (total !== 100) {
+    if (Math.abs(total - 100) > EPSILON) {
       return res.status(400).json({
-        message: `Total bobot harus 100%, saat ini: ${total}%`,
+        message: `Total bobot harus 100%, saat ini: ${total.toFixed(2)}%`,
       });
     }
   }

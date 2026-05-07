@@ -29,6 +29,14 @@ const gradeLetter = (nilai) => {
   return 'D';
 };
 
+const getActiveTahunAjaranId = async () => {
+  const activeSemester = await prisma.semester.findFirst({
+    where: { is_active: true },
+    select: { tahun_ajaran_id: true },
+  });
+  return activeSemester?.tahun_ajaran_id || null;
+};
+
 /**
  * GET /api/nilai
  * Get grades filtered by mapel + semester + kelas
@@ -36,6 +44,7 @@ const gradeLetter = (nilai) => {
 const getAll = async (req, res) => {
   try {
     const { mapelId, semesterId, kelasId } = req.query;
+    const activeTahunAjaranId = await getActiveTahunAjaranId();
 
     const where = {};
     if (mapelId) where.mata_pelajaran_id = mapelId;
@@ -45,7 +54,10 @@ const getAll = async (req, res) => {
     let siswaFilter = undefined;
     if (kelasId) {
       const rombel = await prisma.rombel.findFirst({
-        where: { master_kelas_id: kelasId },
+        where: {
+          master_kelas_id: kelasId,
+          ...(activeTahunAjaranId ? { tahun_ajaran_id: activeTahunAjaranId } : {}),
+        },
         include: { siswa: { select: { siswa_id: true } } },
       });
       if (rombel) {

@@ -31,6 +31,14 @@ async function main() {
   console.log('🌱 Seeding Jadwal Pelajaran untuk SEMUA kelas...');
   console.log('══════════════════════════════════════════════\n');
 
+  const activeSemester = await prisma.semester.findFirst({
+    where: { is_active: true },
+    select: { id: true },
+  });
+  if (!activeSemester) {
+    throw new Error('Tidak ada semester aktif! Aktifkan semester terlebih dahulu.');
+  }
+
   // 1. Hapus jadwal lama
   const deleted = await prisma.jadwalPelajaran.deleteMany({});
   console.log(`   🗑️  ${deleted.count} jadwal lama dihapus.\n`);
@@ -96,13 +104,14 @@ async function main() {
             // Guru tersedia → buat jadwal
             await prisma.jadwalPelajaran.create({
               data: {
-                master_kelas_id:   kelas.id,
-                mata_pelajaran_id: gm.mata_pelajaran_id,
-                guru_id:           gm.guru_id,
-                ruang_kelas_id:    kelas.ruang_kelas_id ?? null,
-                hari:              hari,
-                jam_mulai:         slot.mulai,
-                jam_selesai:       slot.selesai,
+              master_kelas_id:   kelas.id,
+              mata_pelajaran_id: gm.mata_pelajaran_id,
+              guru_id:           gm.guru_id,
+              semester_id:       activeSemester.id,
+              ruang_kelas_id:    kelas.ruang_kelas_id ?? null,
+              hari:              hari,
+              jam_mulai:         slot.mulai,
+              jam_selesai:       slot.selesai,
                 slot_index:        slot.idx,
               },
             });

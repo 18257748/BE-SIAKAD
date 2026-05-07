@@ -11,52 +11,16 @@ const parseMeetingNumber = (value) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
-const repairJournalMeetingConstraints = async () => {
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "JurnalMengajar" DROP CONSTRAINT IF EXISTS "JurnalMengajar_jadwal_id_tanggal_key"'
-  );
-  await prisma.$executeRawUnsafe(
-    'DROP INDEX IF EXISTS "JurnalMengajar_jadwal_id_tanggal_key" CASCADE'
-  );
-
-  await prisma.$executeRawUnsafe(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'JurnalMengajar_jadwal_id_pertemuan_ke_key'
-      ) THEN
-        ALTER TABLE "JurnalMengajar"
-          ADD CONSTRAINT "JurnalMengajar_jadwal_id_pertemuan_ke_key"
-          UNIQUE ("jadwal_id", "pertemuan_ke");
-      END IF;
-    END $$;
-  `);
-
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "Kehadiran" DROP CONSTRAINT IF EXISTS "Kehadiran_siswa_id_jadwal_id_tanggal_key"'
-  );
-  await prisma.$executeRawUnsafe(
-    'DROP INDEX IF EXISTS "Kehadiran_siswa_id_jadwal_id_tanggal_key" CASCADE'
-  );
-
-  await prisma.$executeRawUnsafe(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'Kehadiran_siswa_id_jadwal_id_pertemuan_ke_key'
-      ) THEN
-        ALTER TABLE "Kehadiran"
-          ADD CONSTRAINT "Kehadiran_siswa_id_jadwal_id_pertemuan_ke_key"
-          UNIQUE ("siswa_id", "jadwal_id", "pertemuan_ke");
-      END IF;
-    END $$;
-  `);
-
-  await prisma.$executeRawUnsafe(`
-    CREATE INDEX IF NOT EXISTS "SesiAbsensi_jadwal_id_pertemuan_ke_idx"
-      ON "SesiAbsensi"("jadwal_id", "pertemuan_ke");
-  `);
-};
+const getJadwalWithSemester = (jadwalId) =>
+  prisma.jadwalPelajaran.findUnique({
+    where: { id: jadwalId },
+    select: {
+      id: true,
+      semester_id: true,
+      mata_pelajaran: { select: { nama: true } },
+      master_kelas: { select: { nama: true } },
+    },
+  });
 
 const serializeJurnal = (data) => ({
   id: data.id,
@@ -76,10 +40,12 @@ const createJurnalRecord = ({
   meetingNumber,
   judulMateri,
   deskripsiKegiatan,
+  semesterId,
 }) =>
   prisma.jurnalMengajar.create({
     data: {
       jadwal_id: jadwalId,
+      semester_id: semesterId,
       guru_id: guruId,
       tanggal,
       pertemuan_ke: meetingNumber,
@@ -113,10 +79,19 @@ const create = async (req, res) => {
       });
     }
 
-    // Check if jurnal already exists for this jadwal+meeting number.
+    const jadwal = await getJadwalWithSemester(jadwalId);
+    if (!jadwal) {
+      return res.status(404).json({ message: 'Jadwal tidak ditemukan' });
+    }
+
+    // Check if jurnal already exists for this jadwal+semester+meeting number.
     // Multiple journals may share the same date when a teacher fills missed meetings later.
     const existing = await prisma.jurnalMengajar.findFirst({
-      where: { jadwal_id: jadwalId, pertemuan_ke: meetingNumber },
+      where: {
+        jadwal_id: jadwalId,
+        semester_id: jadwal.semester_id,
+        pertemuan_ke: meetingNumber,
+      },
       include: {
         jadwal: {
           include: {
@@ -143,6 +118,7 @@ const create = async (req, res) => {
       meetingNumber,
       judulMateri,
       deskripsiKegiatan,
+      semesterId: jadwal.semester_id,
     });
 
     return res.status(201).json({
@@ -152,13 +128,23 @@ const create = async (req, res) => {
   } catch (error) {
     if (error.code === 'P2002') {
       const target = Array.isArray(error.meta?.target) ? error.meta.target : [];
-      const { jadwalId, tanggal, pertemuanKe, judulMateri, deskripsiKegiatan } = req.body;
-      const guruId = req.user.userId;
+      const { jadwalId, pertemuanKe } = req.body;
       const meetingNumber = parseMeetingNumber(pertemuanKe);
+      const jadwal = await getJadwalWithSemester(jadwalId);
 
-      if (target.includes('jadwal_id') && target.includes('pertemuan_ke') && meetingNumber) {
+      if (
+        jadwal &&
+        target.includes('jadwal_id') &&
+        target.includes('semester_id') &&
+        target.includes('pertemuan_ke') &&
+        meetingNumber
+      ) {
         const existing = await prisma.jurnalMengajar.findFirst({
-          where: { jadwal_id: jadwalId, pertemuan_ke: meetingNumber },
+          where: {
+            jadwal_id: jadwalId,
+            semester_id: jadwal.semester_id,
+            pertemuan_ke: meetingNumber,
+          },
           include: {
             jadwal: {
               include: {
@@ -177,31 +163,10 @@ const create = async (req, res) => {
         }
       }
 
-      if (target.includes('jadwal_id') && target.includes('tanggal')) {
-        try {
-          await repairJournalMeetingConstraints();
-          const data = await createJurnalRecord({
-            jadwalId,
-            guruId,
-            tanggal,
-            meetingNumber,
-            judulMateri,
-            deskripsiKegiatan,
-          });
-
-          return res.status(201).json({
-            message: 'Jurnal mengajar berhasil dibuat setelah constraint database diperbaiki.',
-            data: serializeJurnal(data),
-          });
-        } catch (repairError) {
-          console.error('Jurnal Constraint Repair Error:', repairError);
-          return res.status(409).json({
-            message:
-              'Database masih memakai constraint lama jadwal+tanggal dan perbaikan otomatis gagal. Jalankan migration perbaikan jurnal terlebih dahulu.',
-            errorCode: 'OLD_JOURNAL_DATE_CONSTRAINT',
-          });
-        }
-      }
+      return res.status(409).json({
+        message: 'Jurnal untuk semester dan pertemuan ini sudah ada.',
+        errorCode: 'DUPLICATE_JURNAL_MEETING',
+      });
     }
 
     console.error('Jurnal Create Error:', error);
@@ -246,10 +211,12 @@ const checkExists = async (req, res) => {
   try {
     const { jadwalId, tanggal } = req.params;
     const meetingNumber = parseMeetingNumber(req.query.pertemuanKe);
+    const jadwal = await getJadwalWithSemester(jadwalId);
 
     const jurnal = await prisma.jurnalMengajar.findFirst({
       where: {
         jadwal_id: jadwalId,
+        ...(jadwal?.semester_id ? { semester_id: jadwal.semester_id } : {}),
         ...(meetingNumber ? { pertemuan_ke: meetingNumber } : { tanggal }),
       },
     });
@@ -300,6 +267,9 @@ const update = async (req, res) => {
       },
     });
   } catch (error) {
+    if (error.code === 'P2002') {
+      return res.status(400).json({ message: 'Jurnal tidak dapat diperbarui karena nomor pertemuan sudah dipakai pada semester yang sama.' });
+    }
     console.error('Jurnal Update Error:', error);
     return res.status(500).json({ message: 'Terjadi kesalahan internal pada server' });
   }

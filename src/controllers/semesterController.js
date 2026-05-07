@@ -85,23 +85,48 @@ const update = async (req, res) => {
 
 const toggleActive = async (req, res) => {
   try {
-    const existing = await prisma.semester.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.semester.findUnique({
+      where: { id: req.params.id },
+      include: { tahun_ajaran: { select: { id: true, is_active: true, kode: true } } },
+    });
     if (!existing) return res.status(404).json({ message: 'Semester tidak ditemukan' });
 
     const newActive = !existing.is_active;
 
-    if (newActive) {
-      await prisma.semester.updateMany({ data: { is_active: false } });
+    if (newActive && !existing.tahun_ajaran?.is_active) {
+      return res.status(400).json({
+        message: `Semester hanya bisa diaktifkan jika tahun ajaran induk "${existing.tahun_ajaran?.kode || '-'}" sedang aktif.`,
+      });
     }
 
-    const data = await prisma.semester.update({
+    if (newActive) {
+      await prisma.$transaction([
+        prisma.semester.updateMany({ data: { is_active: false } }),
+        prisma.semester.update({
+          where: { id: req.params.id },
+          data: { is_active: true },
+          include: { tahun_ajaran: true },
+        }),
+      ]);
+      const data = await prisma.semester.findUnique({
+        where: { id: req.params.id },
+        include: { tahun_ajaran: true },
+      });
+
+      return res.status(200).json({
+        message: 'Semester berhasil diaktifkan',
+        data: { id: data.id, name: data.nama, academicYear: data.tahun_ajaran.kode, isActive: data.is_active },
+      });
+    }
+
+    const data = await prisma.$transaction(async (tx) => tx.semester.update({
       where: { id: req.params.id },
-      data: { is_active: newActive },
+      data: { is_active: false },
       include: { tahun_ajaran: true },
-    });
+    }));
 
     return res.status(200).json({
-      message: `Semester berhasil ${newActive ? 'diaktifkan' : 'dinonaktifkan'}`,
+      message: 'Semester berhasil dinonaktifkan',
       data: { id: data.id, name: data.nama, academicYear: data.tahun_ajaran.kode, isActive: data.is_active },
     });
   } catch (error) {

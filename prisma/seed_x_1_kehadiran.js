@@ -82,7 +82,7 @@ async function main() {
   }
 
   const schedules = await prisma.jadwalPelajaran.findMany({
-    where: { master_kelas_id: masterKelas.id },
+    where: { master_kelas_id: masterKelas.id, semester_id: activeSemester.id },
     include: {
       mata_pelajaran: { select: { nama: true } },
     },

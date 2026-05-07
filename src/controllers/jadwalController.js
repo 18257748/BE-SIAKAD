@@ -15,17 +15,31 @@ const getMappedTeacher = (mappings, schedule) =>
   mappings.find(
     (mapping) =>
       mapping.mata_pelajaran_id === schedule.mata_pelajaran_id &&
-      parseClasses(mapping.kelas_diampu).includes(schedule.master_kelas.nama)
+      (
+        (mapping.kelas_relasi || []).length > 0
+          ? mapping.kelas_relasi.some(
+              (rel) => rel.master_kelas_id === schedule.master_kelas_id
+            )
+          : parseClasses(mapping.kelas_diampu).includes(schedule.master_kelas.nama)
+      )
   );
 
-const getActiveSemester = () =>
-  prisma.semester.findFirst({
-    where: { is_active: true },
-    select: { id: true, tahun_ajaran_id: true },
-  });
+const getSemesterContext = async (semesterId = null) => {
+  if (semesterId) {
+    return prisma.semester.findUnique({
+      where: { id: semesterId },
+      select: { id: true, tahun_ajaran_id: true, is_active: true },
+    });
+  }
 
-const getStudentClassId = async (studentId) => {
-  const activeSemester = await getActiveSemester();
+  return prisma.semester.findFirst({
+    where: { is_active: true },
+    select: { id: true, tahun_ajaran_id: true, is_active: true },
+  });
+};
+
+const getStudentClassId = async (studentId, semester = null) => {
+  const activeSemester = semester || await getSemesterContext();
 
   const rombelSiswa = await prisma.rombelSiswa.findFirst({
     where: {
@@ -47,11 +61,16 @@ const getStudentClassId = async (studentId) => {
 const getAll = async (req, res) => {
   try {
     const { kelasId, hari } = req.query;
+    const semesterContext = await getSemesterContext(req.query.semesterId?.toString() || null);
 
-    const where = {};
+    if (!semesterContext) {
+      return res.status(404).json({ message: 'Semester tidak ditemukan' });
+    }
+
+    const where = { semester_id: semesterContext.id };
 
     if (req.user?.securityRole === 'SISWA') {
-      const studentClassId = await getStudentClassId(req.user.userId);
+      const studentClassId = await getStudentClassId(req.user.userId, semesterContext);
       if (!studentClassId) {
         return res.status(200).json({
           message: 'Data jadwal berhasil diambil',
@@ -84,7 +103,10 @@ const getAll = async (req, res) => {
     gurus.forEach((g) => (guruMap[g.id] = g.nama_lengkap));
 
     const mappings = await prisma.guruMapel.findMany({
-      include: { guru: { select: { id: true, nama_lengkap: true } } },
+      include: {
+        guru: { select: { id: true, nama_lengkap: true } },
+        kelas_relasi: { select: { master_kelas_id: true } },
+      },
     });
 
     return res.status(200).json({
@@ -120,8 +142,14 @@ const getAll = async (req, res) => {
  */
 const getByGuru = async (req, res) => {
   try {
+    const semesterContext = await getSemesterContext(req.query.semesterId?.toString() || null);
+
+    if (!semesterContext) {
+      return res.status(404).json({ message: 'Semester tidak ditemukan' });
+    }
+
     const data = await prisma.jadwalPelajaran.findMany({
-      where: { guru_id: req.params.guruId },
+      where: { guru_id: req.params.guruId, semester_id: semesterContext.id },
       include: {
         master_kelas: { select: { nama: true } },
         mata_pelajaran: { select: { nama: true } },
@@ -178,9 +206,13 @@ const checkTimeConflict = (schedules, newStart, newEnd, skipId = null) => {
 const create = async (req, res) => {
   try {
     const { classId, subjectId, guruId, roomId, day, startTime, endTime } = req.body;
+    const semesterContext = await getSemesterContext(req.body.semesterId?.toString() || null);
 
     if (!classId || !subjectId || !guruId || !day || !startTime || !endTime) {
       return res.status(400).json({ message: 'Data jadwal tidak lengkap' });
+    }
+    if (!semesterContext) {
+      return res.status(404).json({ message: 'Semester tidak ditemukan' });
     }
 
     const startMins = timeToMins(startTime);
@@ -188,7 +220,7 @@ const create = async (req, res) => {
 
     // Get all schedules for the class on that day
     const classSchedules = await prisma.jadwalPelajaran.findMany({
-      where: { master_kelas_id: classId, hari: day },
+      where: { semester_id: semesterContext.id, master_kelas_id: classId, hari: day },
       include: { mata_pelajaran: { select: { nama: true } } },
     });
 
@@ -202,7 +234,7 @@ const create = async (req, res) => {
 
     // Get all schedules for the teacher on that day
     const guruSchedules = await prisma.jadwalPelajaran.findMany({
-      where: { guru_id: guruId, hari: day },
+      where: { semester_id: semesterContext.id, guru_id: guruId, hari: day },
       include: { 
         master_kelas: { select: { nama: true } },
         mata_pelajaran: { select: { nama: true } }
@@ -227,6 +259,7 @@ const create = async (req, res) => {
         mata_pelajaran_id: subjectId,
         guru_id: guruId,
         ruang_kelas_id: roomId || null,
+        semester_id: semesterContext.id,
         hari: day,
         jam_mulai: startTime,
         jam_selesai: endTime,
@@ -264,7 +297,16 @@ const update = async (req, res) => {
 
     const existing = await prisma.jadwalPelajaran.findUnique({
       where: { id: req.params.id },
-      include: { master_kelas: { select: { nama: true } } },
+      select: {
+        id: true,
+        semester_id: true,
+        master_kelas_id: true,
+        guru_id: true,
+        hari: true,
+        jam_mulai: true,
+        jam_selesai: true,
+        master_kelas: { select: { nama: true } },
+      },
     });
     if (!existing) {
       return res.status(404).json({ message: 'Jadwal tidak ditemukan. Data mungkin sudah dihapus.' });
@@ -280,7 +322,7 @@ const update = async (req, res) => {
     const endMins = timeToMins(finalEndTime);
 
     const classSchedules = await prisma.jadwalPelajaran.findMany({
-      where: { master_kelas_id: finalClassId, hari: finalDay },
+      where: { semester_id: existing.semester_id, master_kelas_id: finalClassId, hari: finalDay },
       include: { mata_pelajaran: { select: { nama: true } } },
     });
 
@@ -292,7 +334,7 @@ const update = async (req, res) => {
     }
 
     const guruSchedules = await prisma.jadwalPelajaran.findMany({
-      where: { guru_id: finalGuruId, hari: finalDay },
+      where: { semester_id: existing.semester_id, guru_id: finalGuruId, hari: finalDay },
       include: { 
         master_kelas: { select: { nama: true } },
         mata_pelajaran: { select: { nama: true } }
@@ -339,12 +381,16 @@ const move = async (req, res) => {
   try {
     const { targetDay, targetSlotIndex } = req.body;
 
-    const existing = await prisma.jadwalPelajaran.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.jadwalPelajaran.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, semester_id: true, master_kelas_id: true },
+    });
     if (!existing) return res.status(404).json({ message: 'Jadwal tidak ditemukan' });
 
     // Check conflict at target
     const conflict = await prisma.jadwalPelajaran.findFirst({
       where: {
+        semester_id: existing.semester_id,
         master_kelas_id: existing.master_kelas_id,
         hari: targetDay,
         slot_index: targetSlotIndex,

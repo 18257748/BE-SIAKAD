@@ -8,6 +8,8 @@ const prisma = require('../config/prisma');
 const PDFDocument = require('pdfkit');
 const { canBypassWaliOwnership, findOwnedRombel } = require('../middlewares/ownershipMiddleware');
 
+const MAX_BULK_RAPOR = 50;
+
 const SCHOOL = {
   province: 'PEMERINTAH PROVINSI JAWA BARAT',
   office: 'DINAS PENDIDIKAN',
@@ -640,6 +642,12 @@ const generateBulkRapor = async (req, res) => {
 
     if (!semesterId || !Array.isArray(siswaIds) || siswaIds.length === 0) {
       return res.status(400).json({ message: 'semesterId dan siswaIds wajib diisi' });
+    }
+
+    if (siswaIds.length > MAX_BULK_RAPOR) {
+      return res.status(400).json({
+        message: 'Maksimum 50 siswa per permintaan. Gunakan batch bertahap.',
+      });
     }
 
     const payloads = [];

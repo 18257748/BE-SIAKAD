@@ -8,7 +8,10 @@ const prisma = require('../config/prisma');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
-const QR_EXPIRY_SECONDS = 180; // 3 menit
+const QR_SESSION_SECONDS = 180; // 3 menit
+const QR_TOKEN_SECONDS = 60; // 1 menit
+const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000;
+const JWT_SECRET = process.env.JWT_SECRET || "qr-attendance-secret";
 
 const parseClasses = (classes = '') =>
   `${classes}`
@@ -20,7 +23,16 @@ const getMappedTeacherForAttendance = (mappings, jadwal) =>
   mappings.find(
     (mapping) =>
       mapping.mata_pelajaran_id === jadwal.mata_pelajaran_id &&
-      parseClasses(mapping.kelas_diampu).includes(jadwal.master_kelas.nama)
+      ((mapping.kelas_relasi || []).length > 0
+        ? mapping.kelas_relasi.some((rel) => {
+            const jadwalClassId = jadwal.master_kelas_id || jadwal.master_kelas?.id;
+            const jadwalClassName = jadwal.master_kelas?.nama;
+            if (!jadwalClassId && jadwalClassName) {
+              return rel.master_kelas?.nama === jadwalClassName;
+            }
+            return rel.master_kelas_id === jadwalClassId;
+          })
+        : parseClasses(mapping.kelas_diampu).includes(jadwal.master_kelas?.nama))
   );
 
 const getActiveSemesterId = async () => {
@@ -34,6 +46,192 @@ const getActiveSemesterId = async () => {
 const parseMeetingNumber = (value) => {
   const parsed = parseInt(value, 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const getJakartaDate = (date = new Date()) => new Date(date.getTime() + JAKARTA_OFFSET_MS);
+
+const getJakartaDateString = (date = new Date()) => {
+  const jakartaDate = getJakartaDate(date);
+  const year = jakartaDate.getUTCFullYear();
+  const month = String(jakartaDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(jakartaDate.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getSessionExpiredAt = (openedAt) => new Date(openedAt.getTime() + QR_SESSION_SECONDS * 1000);
+
+const getTokenExpiredAt = (now, sessionExpiredAt) => {
+  const maxTokenAt = new Date(now.getTime() + QR_TOKEN_SECONDS * 1000);
+  return maxTokenAt < sessionExpiredAt ? maxTokenAt : sessionExpiredAt;
+};
+
+const getTokenExpiresInSeconds = (now, tokenExpiredAt) => {
+  const remaining = Math.ceil((tokenExpiredAt.getTime() - now.getTime()) / 1000);
+  return Math.max(1, remaining);
+};
+
+const buildQrPayload = ({ sessionId, jadwalId, tanggal, pertemuanKe, token }) => ({
+  sessionId,
+  token,
+  jadwalId,
+  tanggal,
+  pertemuanKe,
+});
+
+const signQrToken = ({ sessionId, jadwalId, tanggal, pertemuanKe, guruId, tokenExpiresIn }) =>
+  jwt.sign(
+    {
+      sessionId,
+      jadwalId,
+      tanggal,
+      pertemuanKe,
+      guruId,
+      type: 'qr_attendance',
+    },
+    JWT_SECRET,
+    { expiresIn: tokenExpiresIn }
+  );
+
+const normalizeSessionResponse = ({ session, token, now, tokenExpiredAt }) => ({
+  qrData: JSON.stringify(buildQrPayload({
+    sessionId: session.id,
+    token,
+    jadwalId: session.jadwal_id,
+    tanggal: session.tanggal,
+    pertemuanKe: session.pertemuan_ke,
+  })),
+  sessionId: session.id,
+  token,
+  openedAt: session.created_at?.toISOString?.() || now.toISOString(),
+  sessionExpiredAt: session.expired_at.toISOString(),
+  tokenExpiredAt: tokenExpiredAt.toISOString(),
+  expiresIn: QR_SESSION_SECONDS,
+  tokenExpiresIn: getTokenExpiresInSeconds(now, tokenExpiredAt),
+  expiredAt: session.expired_at.toISOString(),
+  tanggal: session.tanggal,
+});
+
+const openOrRefreshSession = async ({
+  jadwalId,
+  guruId,
+  tanggal,
+  meetingNumber,
+  allowCreate = true,
+}) => {
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    const activeSession = await tx.sesiAbsensi.findFirst({
+      where: {
+        jadwal_id: jadwalId,
+        guru_id: guruId,
+        pertemuan_ke: meetingNumber,
+        is_active: true,
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    if (activeSession && activeSession.expired_at && new Date(activeSession.expired_at) <= now) {
+      await tx.sesiAbsensi.updateMany({
+        where: {
+          jadwal_id: jadwalId,
+          guru_id: guruId,
+          pertemuan_ke: meetingNumber,
+          is_active: true,
+        },
+        data: { is_active: false },
+      });
+
+      if (!allowCreate) {
+        return {
+          statusCode: 410,
+          message: 'Sesi QR presensi sudah ditutup',
+        };
+      }
+    }
+
+    if (activeSession && activeSession.expired_at && new Date(activeSession.expired_at) > now) {
+      const sessionExpiredAt = new Date(activeSession.expired_at);
+      const tokenExpiredAt = getTokenExpiredAt(now, sessionExpiredAt);
+      const tokenExpiresIn = getTokenExpiresInSeconds(now, tokenExpiredAt);
+      const token = signQrToken({
+        sessionId: activeSession.id,
+        jadwalId,
+        tanggal: activeSession.tanggal,
+        pertemuanKe: meetingNumber,
+        guruId,
+        tokenExpiresIn,
+      });
+
+      const session = await tx.sesiAbsensi.update({
+        where: { id: activeSession.id },
+        data: {
+          token,
+          expired_at: sessionExpiredAt,
+          is_active: true,
+        },
+      });
+
+      return {
+        statusCode: 200,
+        session,
+        token,
+        tokenExpiredAt,
+        now,
+      };
+    }
+
+    if (!allowCreate) {
+      return {
+        statusCode: 410,
+        message: 'Sesi QR presensi sudah ditutup',
+      };
+    }
+
+    await tx.sesiAbsensi.updateMany({
+      where: {
+        jadwal_id: jadwalId,
+        guru_id: guruId,
+        pertemuan_ke: meetingNumber,
+        is_active: true,
+      },
+      data: { is_active: false },
+    });
+
+    const sessionExpiredAt = getSessionExpiredAt(now);
+    const tokenExpiredAt = getTokenExpiredAt(now, sessionExpiredAt);
+    const tokenExpiresIn = getTokenExpiresInSeconds(now, tokenExpiredAt);
+    const sessionId = crypto.randomUUID();
+    const token = signQrToken({
+      sessionId,
+      jadwalId,
+      tanggal,
+      pertemuanKe: meetingNumber,
+      guruId,
+      tokenExpiresIn,
+    });
+
+    const session = await tx.sesiAbsensi.create({
+      data: {
+        id: sessionId,
+        jadwal_id: jadwalId,
+        guru_id: guruId,
+        tanggal,
+        pertemuan_ke: meetingNumber,
+        token,
+        expired_at: sessionExpiredAt,
+        is_active: true,
+      },
+    });
+
+    return {
+      statusCode: 200,
+      session,
+      token,
+      tokenExpiredAt,
+      now,
+    };
+  });
 };
 
 const getSessionJournal = ({ jadwalId, tanggal, pertemuanKe }) =>
@@ -267,11 +465,14 @@ const getBySiswa = async (req, res) => {
     const { semesterId } = req.query;
     const whereClause = { siswa_id: req.params.siswaId };
 
-    // Beberapa data presensi lama/dev bisa tersimpan tanpa semester_id saat
-    // semester aktif belum dikonfigurasi. Tetap tampilkan agar riwayat siswa
-    // membaca hasil absensi manual maupun QR yang sudah masuk.
     if (semesterId) {
-      whereClause.OR = [{ semester_id: semesterId }, { semester_id: null }];
+      whereClause.semester_id = semesterId;
+    } else {
+      const activeSemesterId = await getActiveSemesterId();
+      if (!activeSemesterId) {
+        return res.status(400).json({ message: 'Tidak ada semester aktif. Aktifkan semester terlebih dahulu.' });
+      }
+      whereClause.semester_id = activeSemesterId;
     }
 
     const data = await prisma.kehadiran.findMany({
@@ -296,6 +497,7 @@ const getBySiswa = async (req, res) => {
     const journals = journalPairs.length > 0
       ? await prisma.jurnalMengajar.findMany({
           where: {
+            semester_id: whereClause.semester_id,
             OR: journalPairs.map((pair) => ({
               jadwal_id: pair.jadwal_id,
               ...(pair.pertemuan_ke ? { pertemuan_ke: pair.pertemuan_ke } : { tanggal: pair.tanggal }),
@@ -315,7 +517,10 @@ const getBySiswa = async (req, res) => {
     );
 
     const mappings = await prisma.guruMapel.findMany({
-      include: { guru: { select: { nama_lengkap: true } } },
+      include: {
+        guru: { select: { nama_lengkap: true } },
+        kelas_relasi: { select: { master_kelas_id: true } },
+      },
     });
 
     return res.status(200).json({
@@ -356,7 +561,9 @@ const getHistory = async (req, res) => {
     // Group by meeting number so multiple meetings on the same date stay separate.
     const grouped = {};
     data.forEach((d) => {
-      const key = d.pertemuan_ke || d.tanggal;
+      const key = d.pertemuan_ke !== null && d.pertemuan_ke !== undefined
+        ? `pertemuan_${d.pertemuan_ke}`
+        : d.tanggal;
       if (!grouped[key]) {
         grouped[key] = {
           tanggal: d.tanggal,
@@ -365,7 +572,7 @@ const getHistory = async (req, res) => {
           records: [],
         };
       }
-      grouped[d.tanggal].records.push({ siswaId: d.siswa_id, status: d.status });
+      grouped[key].records.push({ siswaId: d.siswa_id, status: d.status });
     });
 
     return res.status(200).json({
@@ -410,61 +617,27 @@ const generateQR = async (req, res) => {
       return res.status(404).json({ message: 'Jadwal tidak ditemukan' });
     }
 
-    // Deactivate all previous tokens for this jadwal+meeting number.
-    await prisma.sesiAbsensi.updateMany({
-      where: { jadwal_id: jadwalId, pertemuan_ke: meetingNumber, is_active: true },
-      data: { is_active: false },
-    });
-
-    // Generate unique session ID
-    const sessionId = crypto.randomUUID();
-
-    // Create JWT token with 3-minute expiry
-    const token = jwt.sign(
-      {
-        sessionId,
-        jadwalId,
-        tanggal,
-        pertemuanKe: meetingNumber,
-        guruId,
-        type: 'qr_attendance',
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: `${QR_EXPIRY_SECONDS}s` }
-    );
-
-    // Calculate expiry timestamp
-    const expiredAt = new Date(Date.now() + QR_EXPIRY_SECONDS * 1000);
-
-    // Save to SesiAbsensi
-    await prisma.sesiAbsensi.create({
-      data: {
-        id: sessionId,
-        jadwal_id: jadwalId,
-        guru_id: guruId,
-        tanggal,
-        pertemuan_ke: meetingNumber,
-        token,
-        expired_at: expiredAt,
-        is_active: true,
-      },
-    });
-
-    // Build QR data payload (this is what gets encoded in the QR image)
-    const qrData = JSON.stringify({
-      token,
+    const result = await openOrRefreshSession({
       jadwalId,
+      guruId,
       tanggal,
-      pertemuanKe: meetingNumber,
+      meetingNumber,
+      allowCreate: true,
     });
+
+    if (result.statusCode !== 200) {
+      return res.status(result.statusCode).json({ message: result.message });
+    }
 
     return res.status(200).json({
       message: 'QR Code berhasil dibuat',
       data: {
-        qrData,
-        sessionId,
-        expiresIn: QR_EXPIRY_SECONDS,
-        expiredAt: expiredAt.toISOString(),
+        ...normalizeSessionResponse({
+          session: result.session,
+          token: result.token,
+          now: result.now,
+          tokenExpiredAt: result.tokenExpiredAt,
+        }),
       },
     });
   } catch (error) {
@@ -482,8 +655,42 @@ const generateQR = async (req, res) => {
  * Deactivates old token, generates new one.
  */
 const refreshQR = async (req, res) => {
-  // Reuse generateQR logic — same behavior for refresh
-  return generateQR(req, res);
+  try {
+    const { jadwalId, tanggal, pertemuanKe } = req.body;
+    const guruId = req.user.userId;
+    const meetingNumber = parseMeetingNumber(pertemuanKe);
+
+    if (!jadwalId || !tanggal || !meetingNumber) {
+      return res.status(400).json({ message: 'jadwalId, tanggal, dan pertemuanKe wajib diisi' });
+    }
+
+    const result = await openOrRefreshSession({
+      jadwalId,
+      guruId,
+      tanggal,
+      meetingNumber,
+      allowCreate: false,
+    });
+
+    if (result.statusCode !== 200) {
+      return res.status(result.statusCode).json({ message: result.message });
+    }
+
+    return res.status(200).json({
+      message: 'QR Code berhasil diperbarui',
+      data: {
+        ...normalizeSessionResponse({
+          session: result.session,
+          token: result.token,
+          now: result.now,
+          tokenExpiredAt: result.tokenExpiredAt,
+        }),
+      },
+    });
+  } catch (error) {
+    console.error('RefreshQR Error:', error);
+    return res.status(500).json({ message: 'Terjadi kesalahan internal pada server' });
+  }
 };
 
 /**
@@ -509,11 +716,11 @@ const qrScan = async (req, res) => {
     // ─── STEP 1: Verify JWT Token ─────────────────────────────
     let decoded;
     try {
-      decoded = jwt.verify(qrToken, process.env.JWT_SECRET);
+      decoded = jwt.verify(qrToken, JWT_SECRET);
     } catch (jwtError) {
       if (jwtError.name === 'TokenExpiredError') {
         return res.status(410).json({
-          message: 'QR Code sudah expired. Minta guru untuk refresh QR Code.',
+          message: 'QR presensi sudah kedaluwarsa, minta guru menampilkan QR terbaru',
           code: 'QR_EXPIRED',
         });
       }
@@ -546,10 +753,32 @@ const qrScan = async (req, res) => {
       });
     }
 
+    const now = new Date();
+
     // ─── STEP 2: Verify Token in Database ─────────────────────
-    const sesi = await prisma.sesiAbsensi.findUnique({
+    let sesi = await prisma.sesiAbsensi.findUnique({
       where: { token: qrToken },
     });
+
+    if (!sesi && decoded.sessionId) {
+      const sessionById = await prisma.sesiAbsensi.findUnique({
+        where: { id: decoded.sessionId },
+      });
+
+      if (sessionById) {
+        if (!sessionById.is_active || now > new Date(sessionById.expired_at)) {
+          return res.status(410).json({
+            message: 'Sesi QR presensi sudah ditutup',
+            code: 'SESSION_CLOSED',
+          });
+        }
+
+        return res.status(400).json({
+          message: 'QR presensi sudah kedaluwarsa, minta guru menampilkan QR terbaru',
+          code: 'QR_EXPIRED',
+        });
+      }
+    }
 
     if (!sesi) {
       return res.status(400).json({
@@ -560,19 +789,26 @@ const qrScan = async (req, res) => {
 
     if (!sesi.is_active) {
       return res.status(410).json({
-        message: 'QR Code sudah expired. Minta guru untuk refresh QR Code.',
-        code: 'QR_EXPIRED',
+        message: 'Sesi QR presensi sudah ditutup',
+        code: 'SESSION_CLOSED',
       });
     }
 
-    if (new Date() > sesi.expired_at) {
-      // Token still marked active but past expiry — deactivate it
+    if (now > new Date(sesi.expired_at)) {
+      // Token/session still marked active but past expiry — deactivate it
       await prisma.sesiAbsensi.update({
         where: { id: sesi.id },
         data: { is_active: false },
       });
       return res.status(410).json({
-        message: 'QR Code sudah expired. Minta guru untuk refresh QR Code.',
+        message: 'Sesi QR presensi sudah ditutup',
+        code: 'SESSION_CLOSED',
+      });
+    }
+
+    if (decoded.sessionId && decoded.sessionId !== sesi.id) {
+      return res.status(400).json({
+        message: 'QR presensi sudah kedaluwarsa, minta guru menampilkan QR terbaru',
         code: 'QR_EXPIRED',
       });
     }
@@ -645,7 +881,7 @@ const qrScan = async (req, res) => {
 
     if (existingAttendance && existingAttendance.status === 'HADIR') {
       return res.status(409).json({
-        message: 'Anda sudah melakukan absen di pertemuan ini.',
+        message: 'Kehadiran sudah tercatat',
         code: 'ALREADY_ATTENDED',
       });
     }
@@ -686,7 +922,7 @@ const qrScan = async (req, res) => {
     });
 
     return res.status(200).json({
-      message: 'Presensi berhasil dicatat. Status: HADIR',
+      message: 'Kehadiran berhasil dicatat',
       code: 'SUCCESS',
     });
   } catch (error) {

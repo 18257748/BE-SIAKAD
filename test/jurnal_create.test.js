@@ -1,4 +1,7 @@
 jest.mock('../src/config/prisma', () => ({
+  jadwalPelajaran: {
+    findUnique: jest.fn(),
+  },
   jurnalMengajar: {
     findFirst: jest.fn(),
     create: jest.fn(),
@@ -39,6 +42,12 @@ const jadwalInclude = {
 describe('jurnal create for attendance session', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    prisma.jadwalPelajaran.findUnique.mockResolvedValue({
+      id: requestBody.jadwalId,
+      semester_id: 'semester-001',
+      mata_pelajaran: jadwalInclude.mata_pelajaran,
+      master_kelas: jadwalInclude.master_kelas,
+    });
   });
 
   test('creates a new jurnal before opening attendance', async () => {
@@ -50,6 +59,7 @@ describe('jurnal create for attendance session', () => {
       pertemuan_ke: requestBody.pertemuanKe,
       judul_materi: requestBody.judulMateri,
       deskripsi_kegiatan: requestBody.deskripsiKegiatan,
+      semester_id: 'semester-001',
       jadwal: jadwalInclude,
     });
 
@@ -63,6 +73,7 @@ describe('jurnal create for attendance session', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           jadwal_id: requestBody.jadwalId,
+          semester_id: 'semester-001',
           guru_id: 'guru-001',
           tanggal: requestBody.tanggal,
           pertemuan_ke: requestBody.pertemuanKe,
@@ -87,6 +98,7 @@ describe('jurnal create for attendance session', () => {
       pertemuan_ke: requestBody.pertemuanKe,
       judul_materi: requestBody.judulMateri,
       deskripsi_kegiatan: requestBody.deskripsiKegiatan,
+      semester_id: 'semester-001',
       jadwal: jadwalInclude,
     });
 
@@ -117,6 +129,7 @@ describe('jurnal create for attendance session', () => {
       pertemuan_ke: 2,
       judul_materi: 'Substitusi integral',
       deskripsi_kegiatan: requestBody.deskripsiKegiatan,
+      semester_id: 'semester-001',
       jadwal: jadwalInclude,
     });
 
@@ -134,7 +147,11 @@ describe('jurnal create for attendance session', () => {
 
     expect(prisma.jurnalMengajar.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { jadwal_id: requestBody.jadwalId, pertemuan_ke: 2 },
+        where: {
+          jadwal_id: requestBody.jadwalId,
+          semester_id: 'semester-001',
+          pertemuan_ke: 2,
+        },
       })
     );
     expect(res.status).toHaveBeenCalledWith(201);
@@ -142,6 +159,25 @@ describe('jurnal create for attendance session', () => {
       id: 'jurnal-002',
       tanggal: requestBody.tanggal,
       pertemuanKe: 2,
+    });
+  });
+
+  test('returns clear duplicate response on P2002 fallback', async () => {
+    prisma.jurnalMengajar.findFirst.mockResolvedValue(null);
+    prisma.jurnalMengajar.create.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['jadwal_id', 'semester_id', 'pertemuan_ke'] },
+    });
+
+    const req = { body: requestBody, user: { userId: 'guru-001' } };
+    const res = mockRes();
+
+    await jurnalController.create(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.body).toMatchObject({
+      message: 'Jurnal untuk semester dan pertemuan ini sudah ada.',
+      errorCode: 'DUPLICATE_JURNAL_MEETING',
     });
   });
 });

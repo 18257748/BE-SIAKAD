@@ -21,8 +21,22 @@ const parseClasses = (classes = '') =>
     .map((item) => item.trim())
     .filter(Boolean);
 
-const guruMapelMatchesClass = (mapping, className) =>
-  parseClasses(mapping.kelas_diampu).includes(className);
+const guruMapelMatchesClass = (mapping, { classId = null, className = null } = {}) => {
+  const pivotIds = (mapping.kelas_relasi || [])
+    .map((item) => item.master_kelas_id)
+    .filter(Boolean);
+  if (pivotIds.length > 0) {
+    if (classId) return pivotIds.includes(classId);
+    if (className) {
+      return (mapping.kelas_relasi || []).some(
+        (item) => item.master_kelas?.nama === className
+      );
+    }
+    return false;
+  }
+  if (!className) return false;
+  return parseClasses(mapping.kelas_diampu).includes(className);
+};
 
 const findOwnedRombel = async ({
   userId,
@@ -179,7 +193,7 @@ const verifyGuruOwnsJadwal = async (req, res, next) => {
     const jadwal = await prisma.jadwalPelajaran.findUnique({
       where: { id: jadwalId },
       include: {
-        master_kelas: { select: { nama: true } },
+        master_kelas: { select: { id: true, nama: true } },
       },
     });
 
@@ -193,9 +207,17 @@ const verifyGuruOwnsJadwal = async (req, res, next) => {
           guru_id: req.user.userId,
           mata_pelajaran_id: jadwal.mata_pelajaran_id,
         },
+        include: {
+          kelas_relasi: {
+            select: { master_kelas_id: true },
+          },
+        },
       });
 
-      if (mappedAssignment && guruMapelMatchesClass(mappedAssignment, jadwal.master_kelas.nama)) {
+      if (mappedAssignment && guruMapelMatchesClass(mappedAssignment, {
+        classId: jadwal.master_kelas_id || jadwal.master_kelas?.id,
+        className: jadwal.master_kelas?.nama,
+      })) {
         await prisma.jadwalPelajaran.update({
           where: { id: jadwalId },
           data: { guru_id: req.user.userId },

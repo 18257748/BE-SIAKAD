@@ -13,9 +13,7 @@ const handlePrismaError = (error, res, context) => {
   if (error.code === 'P2002') {
     const fields = error.meta?.target || [];
     if (fields.includes('master_kelas_id') && fields.includes('tahun_ajaran_id')) {
-      return res.status(409).json({
-        message: 'Rombel untuk kelas ini sudah ada di tahun ajaran yang aktif. Setiap kelas hanya boleh memiliki satu rombel per tahun ajaran.',
-      });
+      return res.status(400).json({ message: 'Rombel untuk kelas ini pada tahun ajaran tersebut sudah ada' });
     }
     if (fields.includes('ruang_kelas_id') || fields.includes('ruangKelasId')) {
       return res.status(409).json({
@@ -46,11 +44,16 @@ const handlePrismaError = (error, res, context) => {
 
 const getAll = async (req, res) => {
   try {
+    const { tahunAjaranId } = req.query;
+    const where = tahunAjaranId ? { tahun_ajaran_id: tahunAjaranId } : {};
+
     const data = await prisma.rombel.findMany({
+      where,
       include: {
         master_kelas: {
-          include: {
-            wali_kelas: { select: { id: true, nama_lengkap: true } },
+          select: {
+            id: true,
+            nama: true,
           },
         },
         tahun_ajaran: true,
@@ -72,8 +75,8 @@ const getAll = async (req, res) => {
         ruangKelasId: d.ruang_kelas_id,
         ruangKelasCode: d.ruang_kelas?.kode || '-',
         ruangKelasCapacity: d.ruang_kelas?.kapasitas || 0,
-        waliKelasId: d.wali_kelas_id || d.master_kelas.wali_kelas_id,
-        waliKelasName: d.wali_kelas?.nama_lengkap || d.master_kelas.wali_kelas?.nama_lengkap || '-',
+        waliKelasId: d.wali_kelas_id,
+        waliKelasName: d.wali_kelas?.nama_lengkap || '-',
         siswaCount: d._count.siswa,
       })),
     });
@@ -85,14 +88,22 @@ const getAll = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { masterKelasId, ruangKelasId } = req.body;
+    const { masterKelasId, ruangKelasId, tahunAjaranId } = req.body;
     if (!masterKelasId || !ruangKelasId) {
       return res.status(400).json({ message: 'Kelas dan ruangan wajib diisi.' });
     }
 
-    const activeTahun = await prisma.tahunAjaran.findFirst({ where: { is_active: true } });
-    if (!activeTahun) {
-      return res.status(400).json({ message: 'Tidak ada Tahun Ajaran aktif. Aktifkan terlebih dahulu di menu Master Akademik.' });
+    let targetTahun;
+    if (tahunAjaranId) {
+      targetTahun = await prisma.tahunAjaran.findUnique({ where: { id: tahunAjaranId } });
+      if (!targetTahun) {
+        return res.status(404).json({ message: 'Tahun Ajaran tidak ditemukan' });
+      }
+    } else {
+      targetTahun = await prisma.tahunAjaran.findFirst({ where: { is_active: true } });
+      if (!targetTahun) {
+        return res.status(400).json({ message: 'Tidak ada Tahun Ajaran aktif. Aktifkan terlebih dahulu di menu Master Akademik.' });
+      }
     }
 
     const masterKelas = await prisma.masterKelas.findUnique({
@@ -102,18 +113,16 @@ const create = async (req, res) => {
 
     // Pre-check 1: apakah rombel untuk kelas ini sudah ada?
     const existingKelas = await prisma.rombel.findFirst({
-      where: { master_kelas_id: masterKelasId, tahun_ajaran_id: activeTahun.id },
+      where: { master_kelas_id: masterKelasId, tahun_ajaran_id: targetTahun.id },
       include: { master_kelas: { select: { nama: true } } },
     });
     if (existingKelas) {
-      return res.status(409).json({
-        message: `Rombel untuk kelas "${existingKelas.master_kelas.nama}" sudah dibuat pada tahun ajaran ${activeTahun.kode}. Satu kelas hanya boleh memiliki satu rombel per tahun ajaran.`,
-      });
+      return res.status(400).json({ message: 'Rombel untuk kelas ini pada tahun ajaran tersebut sudah ada' });
     }
 
     // Pre-check 2: apakah ruangan sudah dipakai rombel lain di tahun ajaran yang sama?
     const existingRuangan = await prisma.rombel.findFirst({
-      where: { ruang_kelas_id: ruangKelasId, tahun_ajaran_id: activeTahun.id },
+      where: { ruang_kelas_id: ruangKelasId, tahun_ajaran_id: targetTahun.id },
       include: {
         master_kelas: { select: { nama: true } },
         ruang_kelas: { select: { kode: true } },
@@ -121,14 +130,14 @@ const create = async (req, res) => {
     });
     if (existingRuangan) {
       return res.status(409).json({
-        message: `Ruangan "${existingRuangan.ruang_kelas?.kode}" sudah digunakan oleh rombel kelas "${existingRuangan.master_kelas.nama}" pada tahun ajaran ${activeTahun.kode}. Pilih ruangan lain.`,
+        message: `Ruangan "${existingRuangan.ruang_kelas?.kode}" sudah digunakan oleh rombel kelas "${existingRuangan.master_kelas.nama}" pada tahun ajaran ${targetTahun.kode}. Pilih ruangan lain.`,
       });
     }
 
     const data = await prisma.rombel.create({
       data: {
         master_kelas_id: masterKelasId,
-        tahun_ajaran_id: activeTahun.id,
+        tahun_ajaran_id: targetTahun.id,
         ruang_kelas_id: ruangKelasId,
         wali_kelas_id: masterKelas?.wali_kelas_id || null,
       },
@@ -143,8 +152,11 @@ const create = async (req, res) => {
       message: `Rombel untuk kelas "${data.master_kelas.nama}" berhasil ditambahkan pada tahun ajaran ${data.tahun_ajaran.kode}.`,
       data: {
         id: data.id,
+        masterKelasId: data.master_kelas_id,
         masterKelasName: data.master_kelas.nama,
+        tahunAjaranId: data.tahun_ajaran_id,
         tahunAjaranCode: data.tahun_ajaran.kode,
+        ruangKelasId: data.ruang_kelas_id,
         ruangKelasCode: data.ruang_kelas?.kode || '-',
       },
     });
@@ -198,14 +210,6 @@ const update = async (req, res) => {
         ruang_kelas: true,
       },
     });
-
-    // Sync: also update the linked masterKelas's ruang_kelas_id
-    if (ruangKelasId !== undefined && currentRombel.master_kelas_id) {
-      await prisma.masterKelas.update({
-        where: { id: currentRombel.master_kelas_id },
-        data: { ruang_kelas_id: ruangKelasId || null },
-      });
-    }
 
     return res.status(200).json({
       message: `Rombel berhasil diperbarui. Ruangan: ${data.ruang_kelas?.kode || '-'}.`,
@@ -390,8 +394,55 @@ const assignSiswa = async (req, res) => {
 
     if (!rombel) return res.status(404).json({ message: 'Rombel tidak ditemukan' });
 
+    const existingInOtherRombel = await prisma.rombelSiswa.findMany({
+      where: {
+        siswa_id: { in: siswaIds },
+        rombel_id: { not: rombel.id },
+        rombel: {
+          tahun_ajaran_id: rombel.tahun_ajaran_id,
+        },
+      },
+      include: {
+        siswa: { select: { id: true, nama_lengkap: true, nomor_induk: true } },
+        rombel: {
+          select: {
+            id: true,
+            master_kelas: { select: { nama: true } },
+          },
+        },
+      },
+    });
+
+    if (existingInOtherRombel.length > 0) {
+      return res.status(400).json({
+        message: 'Beberapa siswa sudah terdaftar di rombel lain pada tahun ajaran yang sama.',
+        data: existingInOtherRombel.map((item) => ({
+          siswaId: item.siswa.id,
+          siswaName: item.siswa.nama_lengkap,
+          nisn: item.siswa.nomor_induk || '-',
+          rombelId: item.rombel.id,
+          className: item.rombel.master_kelas?.nama || '-',
+        })),
+      });
+    }
+
+    const existingInTargetRombel = await prisma.rombelSiswa.findMany({
+      where: {
+        rombel_id: rombel.id,
+        siswa_id: { in: siswaIds },
+      },
+      select: { siswa_id: true },
+    });
+    const existingTargetIds = new Set(existingInTargetRombel.map((item) => item.siswa_id));
+    const createData = siswaIds
+      .filter((siswaId) => !existingTargetIds.has(siswaId))
+      .map((siswaId) => ({
+        rombel_id: rombel.id,
+        siswa_id: siswaId,
+      }));
+
     if (rombel.ruang_kelas) {
-      const newTotal = rombel._count.siswa + siswaIds.length;
+      const newTotal = rombel._count.siswa + createData.length;
       if (newTotal > rombel.ruang_kelas.kapasitas) {
         return res.status(400).json({ 
           message: `Kapasitas Ruang ${rombel.ruang_kelas.kode} tidak mencukupi. Terisi ${rombel._count.siswa}, maks ${rombel.ruang_kelas.kapasitas}. (Anda memasukkan ${siswaIds.length} siswa)` 
@@ -399,17 +450,16 @@ const assignSiswa = async (req, res) => {
       }
     }
 
-    const createData = siswaIds.map((siswaId) => ({
-      rombel_id: req.params.id,
-      siswa_id: siswaId,
-    }));
+    if (createData.length === 0) {
+      return res.status(200).json({ message: 'Tidak ada siswa baru untuk ditambahkan ke rombel' });
+    }
 
     await prisma.rombelSiswa.createMany({
       data: createData,
       skipDuplicates: true,
     });
 
-    return res.status(201).json({ message: `${siswaIds.length} siswa berhasil ditambahkan ke rombel` });
+    return res.status(201).json({ message: `${createData.length} siswa berhasil ditambahkan ke rombel` });
   } catch (error) {
     console.error('Rombel AssignSiswa Error:', error);
     return res.status(500).json({ message: 'Terjadi kesalahan internal pada server' });

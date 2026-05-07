@@ -2,7 +2,8 @@ const express = require('express');
 const request = require('supertest');
 
 jest.mock('../src/config/prisma', () => ({
-  rombel: { findFirst: jest.fn() },
+  rombel: { findFirst: jest.fn(), update: jest.fn() },
+  rombelSiswa: { updateMany: jest.fn() },
   semester: { findMany: jest.fn() },
   nilai: { findMany: jest.fn() },
   kehadiran: { findMany: jest.fn() },
@@ -61,6 +62,26 @@ describe('Promosi Wali Kelas', () => {
       missingData: ['nilai', 'kehadiran'],
       nilaiRataRata: 0,
       persentaseKehadiran: 0,
+      });
+  });
+
+  test('menghitung SAKIT dan IZIN sebagai kehadiran valid', async () => {
+    prisma.nilai.findMany.mockResolvedValue([
+      { siswa_id: 'siswa-001', nilai_akhir: 80 },
+    ]);
+    prisma.kehadiran.findMany.mockResolvedValue([
+      { siswa_id: 'siswa-001', status: 'HADIR' },
+      { siswa_id: 'siswa-001', status: 'SAKIT' },
+      { siswa_id: 'siswa-001', status: 'IZIN' },
+      { siswa_id: 'siswa-001', status: 'ALPA' },
+    ]);
+
+    const res = await request(createApp()).get('/api/promosi/rombel/rombel-001');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({
+      persentaseKehadiran: 75,
+      status: 'tinggal',
     });
   });
 
@@ -75,5 +96,28 @@ describe('Promosi Wali Kelas', () => {
     expect(res.status).toBe(400);
     expect(res.body.message).toContain('naik atau tinggal');
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('mengunci rombel dengan update batch', async () => {
+    prisma.$transaction.mockResolvedValue([]);
+    const res = await request(createApp())
+      .post('/api/promosi/lock')
+      .send({
+        rombelId: 'rombel-001',
+        decisions: [{ siswaId: 'siswa-001', status: 'naik' }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(prisma.rombelSiswa.updateMany).toHaveBeenCalledWith({
+      where: {
+        rombel_id: 'rombel-001',
+        siswa_id: { in: ['siswa-001'] },
+      },
+      data: { status_promosi: 'NAIK' },
+    });
+    expect(prisma.rombel.update).toHaveBeenCalledWith({
+      where: { id: 'rombel-001' },
+      data: { is_locked: true },
+    });
   });
 });

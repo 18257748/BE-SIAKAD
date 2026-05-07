@@ -255,6 +255,15 @@ const toggleActive = async (req, res) => {
  */
 const remove = async (req, res) => {
   try {
+    const existing = await prisma.kontenPublik.findUnique({
+      where: { id: req.params.id },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Konten tidak ditemukan' });
+    }
+
     await prisma.kontenPublik.delete({ where: { id: req.params.id } });
     return res.status(200).json({ message: 'Konten berhasil dihapus' });
   } catch (error) {

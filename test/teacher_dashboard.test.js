@@ -9,6 +9,7 @@ const request = require('supertest');
 
 // ── Mock Prisma ──────────────────────────────────────────────────────────────
 jest.mock('../src/config/prisma', () => ({
+  semester: { findFirst: jest.fn() },
   guruMapel: { findMany: jest.fn() },
   jadwalPelajaran: { findMany: jest.fn(), count: jest.fn() },
   jurnalMengajar: { findMany: jest.fn() },
@@ -81,6 +82,11 @@ const mockSchedules = [
 describe('Teacher Dashboard — Sinkronisasi Daftar Kelas', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    prisma.semester.findFirst.mockResolvedValue({
+      id: 'semester-aktif',
+      nama: 'Ganjil',
+      tahun_ajaran: { kode: '2026/2027' },
+    });
     prisma.guruMapel.findMany.mockResolvedValue([]);
     prisma.jadwalPelajaran.count.mockResolvedValue(3);
     prisma.jurnalMengajar.findMany.mockResolvedValue([]);

@@ -194,6 +194,28 @@ const create = async (req, res) => {
 const update = async (req, res) => {
   try {
     const { name, email, username, idNumber, role, status } = req.body;
+    const targetUserId = req.params.id;
+
+    const conflictChecks = [
+      ...(email ? [{ email: { equals: email, mode: 'insensitive' } }] : []),
+      ...(username ? [{ username: { equals: username, mode: 'insensitive' } }] : []),
+      ...(idNumber ? [{ nomor_induk: idNumber }] : []),
+    ];
+
+    if (conflictChecks.length > 0) {
+      const existing = await prisma.user.findFirst({
+        where: {
+          NOT: { id: targetUserId },
+          OR: conflictChecks,
+        },
+      });
+
+      if (existing) {
+        return res.status(400).json({
+          message: 'Email, username, atau nomor induk sudah digunakan oleh pengguna lain',
+        });
+      }
+    }
 
     const updateData = {};
     if (name) updateData.nama_lengkap = name;
@@ -220,7 +242,7 @@ const update = async (req, res) => {
     }
 
     const user = await prisma.user.update({
-      where: { id: req.params.id },
+      where: { id: targetUserId },
       data: updateData,
       include: { role: true, profile: true },
     });
@@ -238,6 +260,12 @@ const update = async (req, res) => {
       },
     });
   } catch (error) {
+    if (error.code === 'P2002') {
+      return res.status(400).json({
+        message: 'Email, username, atau nomor induk sudah digunakan oleh pengguna lain',
+      });
+    }
+
     console.error('User Update Error:', error);
     return res.status(500).json({ message: 'Terjadi kesalahan internal pada server' });
   }
@@ -248,6 +276,15 @@ const update = async (req, res) => {
  */
 const remove = async (req, res) => {
   try {
+    const existing = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
+    }
+
     await prisma.user.delete({ where: { id: req.params.id } });
     return res.status(200).json({ message: 'Pengguna berhasil dihapus' });
   } catch (error) {

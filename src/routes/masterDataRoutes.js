@@ -58,6 +58,10 @@ router.patch('/tahun-ajaran/:id/toggle',
   validateUUID('id'),
   tahunAjaranCtrl.toggleActive
 );
+router.post('/tahun-ajaran/:id/generate-rombel',
+  validateUUID('id'),
+  tahunAjaranCtrl.generateRombel
+);
 router.delete('/tahun-ajaran/:id', 
   validateUUID('id'),
   tahunAjaranCtrl.remove

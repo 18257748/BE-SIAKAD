@@ -95,7 +95,7 @@ async function main() {
 
     // Ambil semua jadwal kelas beserta info guru dan mapel
     const jadwalList = await prisma.jadwalPelajaran.findMany({
-      where: { master_kelas_id: masterKelas.id },
+      where: { master_kelas_id: masterKelas.id, semester_id: activeSemester.id },
       include: {
         mata_pelajaran: { select: { nama: true } },
         guru: { select: { id: true, nama_lengkap: true } },
@@ -128,6 +128,7 @@ async function main() {
 
         jurnalData.push({
           jadwal_id: jadwal.id,
+          semester_id: activeSemester.id,
           guru_id: guruId,
           tanggal,
           pertemuan_ke: pertemuan,

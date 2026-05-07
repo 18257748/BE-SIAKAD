@@ -69,7 +69,7 @@ async function main() {
   
   const mapelList = await prisma.mataPelajaran.findMany();
   const jadwalList = await prisma.jadwalPelajaran.findMany({
-    where: { master_kelas_id: masterKelas.id }
+    where: { master_kelas_id: masterKelas.id, semester_id: activeSemester.id }
   });
 
   const catatanData = [];

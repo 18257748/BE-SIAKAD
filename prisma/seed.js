@@ -306,6 +306,10 @@ async function main() {
       semesterMap[`${ta.kode}|${semNama}`] = sem;
     }
   }
+  const activeSemester = Object.values(semesterMap).find((semester) => semester.is_active);
+  if (!activeSemester) {
+    throw new Error('Tidak ada semester aktif untuk seeding jadwal dan jurnal.');
+  }
   console.log(`   ✅ 6 semesters created\n`);
 
   // ══════════════════════════════════════════════
@@ -568,6 +572,7 @@ async function main() {
             master_kelas_id: mk.id,
             mata_pelajaran_id: mapel.id,
             guru_id: guruId,
+            semester_id: activeSemester.id,
             ruang_kelas_id: ruangId,
             hari: hariList[dayIdx],
             jam_mulai: slotTimes[s].mulai,
@@ -739,10 +744,17 @@ async function main() {
 
       try {
         await prisma.jurnalMengajar.upsert({
-          where: { jadwal_id_pertemuan_ke: { jadwal_id: jadwal.id, pertemuan_ke: week } },
+          where: {
+            jadwal_id_semester_id_pertemuan_ke: {
+              jadwal_id: jadwal.id,
+              semester_id: activeSemester.id,
+              pertemuan_ke: week,
+            },
+          },
           update: {},
           create: {
             jadwal_id: jadwal.id,
+            semester_id: activeSemester.id,
             guru_id: jadwal.guru_id,
             tanggal,
             pertemuan_ke: week,

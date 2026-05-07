@@ -42,11 +42,15 @@ const rateLimiter = (options = {}) => {
     maxRequests = 100,
     message = 'Terlalu banyak permintaan. Silakan coba lagi nanti.',
     keyPrefix = 'global',
+    keyGenerator = null,
   } = options;
 
   return (req, res, next) => {
     const ip = req.ip || req.connection.remoteAddress || 'unknown';
-    const key = `${keyPrefix}:${ip}`;
+    const keySource = typeof keyGenerator === 'function'
+      ? keyGenerator(req)
+      : ip;
+    const key = `${keyPrefix}:${keySource || ip}`;
     const now = Date.now();
 
     let record = rateLimitStore.get(key);
@@ -120,10 +124,11 @@ const passwordResetLimiter = rateLimiter({
  * QR scan limiter: 30 scans per minute (to prevent spam scanning)
  */
 const qrScanLimiter = rateLimiter({
-  windowMs: 60 * 1000,
-  maxRequests: 30,
-  message: 'Terlalu banyak scan QR. Silakan tunggu sebentar.',
+  windowMs: 10 * 1000,
+  maxRequests: 3,
+  message: 'Terlalu banyak percobaan scan. Tunggu beberapa detik.',
   keyPrefix: 'qr-scan',
+  keyGenerator: (req) => req.user?.userId || req.user?.id || req.ip,
 });
 
 module.exports = {

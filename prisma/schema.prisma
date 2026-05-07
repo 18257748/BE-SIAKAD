@@ -9,8 +9,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -23,43 +23,43 @@ model Role {
 
 // ─── USER (Akun Login) ──────────────────────────
 model User {
-  id            String   @id @default(uuid())
-  auth_user_id  String?  @unique @db.Uuid
-  username      String?  @unique
-  email         String   @unique
-  password_hash String
-  nama_lengkap  String   @default("")
-  nomor_induk   String?  // NIP untuk guru, NISN untuk siswa
-  role_id       Int
-  status_aktif  Boolean  @default(true)
-  is_sso_allowed Boolean @default(true)
-  last_login_at DateTime?
-  force_password_change Boolean @default(true)
-  password_changed_at DateTime?
-  session_version Int @default(1)
-  failed_login_count Int @default(0)
-  locked_until DateTime?
-  avatar_url    String?
-  created_at    DateTime @default(now())
-  updated_at    DateTime @updatedAt
+  id                    String    @id @default(uuid())
+  auth_user_id          String?   @unique @db.Uuid
+  username              String?   @unique
+  email                 String    @unique
+  password_hash         String
+  nama_lengkap          String    @default("")
+  nomor_induk           String? // NIP untuk guru, NISN untuk siswa
+  role_id               Int
+  status_aktif          Boolean   @default(true)
+  is_sso_allowed        Boolean   @default(true)
+  last_login_at         DateTime?
+  force_password_change Boolean   @default(true)
+  password_changed_at   DateTime?
+  session_version       Int       @default(1)
+  failed_login_count    Int       @default(0)
+  locked_until          DateTime?
+  avatar_url            String?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
 
-  role          Role     @relation(fields: [role_id], references: [id])
-  profile       UserProfile?
-  audit_logs    AuditLog[] @relation("AuditActorUser")
-  security_events UserSecurityEvent[] @relation("SecurityEventUser")
-  email_otps    UserEmailOtp[]
+  role             Role                 @relation(fields: [role_id], references: [id])
+  profile          UserProfile?
+  audit_logs       AuditLog[]           @relation("AuditActorUser")
+  security_events  UserSecurityEvent[]  @relation("SecurityEventUser")
+  email_otps       UserEmailOtp[]
   refresh_sessions UserRefreshSession[]
 
   // Relasi guru
-  guru_mapel       GuruMapel[]
-  jadwal_mengajar  JadwalPelajaran[]
-  wali_master_kelas MasterKelas[] @relation("WaliKelasRelation")
-  wali_rombel      Rombel[]      @relation("WaliKelasRombelRelation")
+  guru_mapel        GuruMapel[]
+  jadwal_mengajar   JadwalPelajaran[]
+  wali_master_kelas MasterKelas[]     @relation("WaliKelasRelation")
+  wali_rombel       Rombel[]          @relation("WaliKelasRombelRelation")
 
   // Relasi siswa
-  rombel_siswa  RombelSiswa[]
-  kehadiran     Kehadiran[]
-  nilai         Nilai[]
+  rombel_siswa RombelSiswa[]
+  kehadiran    Kehadiran[]
+  nilai        Nilai[]
 
   // Relasi catatan akademik
   catatan_sebagai_siswa CatatanAkademik[] @relation("CatatanSiswaRelation")
@@ -71,27 +71,27 @@ model User {
 
 // ─── USER PROFILE (Biodata Lengkap) ─────────────
 model UserProfile {
-  id              String  @id @default(uuid())
-  user_id         String  @unique
-  jenis_kelamin   String? // "L" atau "P"
-  tanggal_lahir   String?
-  tempat_lahir    String?
-  agama           String?
-  nik             String?
-  nama_ibu_kandung String?
+  id                String  @id @default(uuid())
+  user_id           String  @unique
+  jenis_kelamin     String? // "L" atau "P"
+  tanggal_lahir     String?
+  tempat_lahir      String?
+  agama             String?
+  nik               String?
+  nama_ibu_kandung  String?
   status_perkawinan String?
 
   // Alamat
-  provinsi        String?
-  kota_kabupaten  String?
-  kecamatan       String?
-  kelurahan       String?
-  detail_alamat   String?
-  rt              String?
-  rw              String?
-  kode_pos        String?
-  personal_email  String? @unique
-  personal_email_pending String?
+  provinsi                   String?
+  kota_kabupaten             String?
+  kecamatan                  String?
+  kelurahan                  String?
+  detail_alamat              String?
+  rt                         String?
+  rw                         String?
+  kode_pos                   String?
+  personal_email             String?   @unique
+  personal_email_pending     String?
   personal_email_verified_at DateTime?
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -99,15 +99,15 @@ model UserProfile {
 
 // ─── USER EMAIL OTP ───────────────────────────
 model UserEmailOtp {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id         String
   email           String
   purpose         String
   otp_hash        String
   expires_at      DateTime
   consumed_at     DateTime?
-  failed_attempts Int      @default(0)
-  created_at      DateTime @default(now())
+  failed_attempts Int       @default(0)
+  created_at      DateTime  @default(now())
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -120,16 +120,16 @@ model UserEmailOtp {
 
 // ─── USER REFRESH SESSIONS ─────────────────────
 model UserRefreshSession {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id         String
-  token_hash      String   @unique
+  token_hash      String    @unique
   session_version Int
   expires_at      DateTime
   revoked_at      DateTime?
   user_agent      String?
   ip_address      String?
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -184,26 +184,28 @@ model UserSecurityEvent {
 
 // ─── TAHUN AJARAN ──────────────────────────────
 model TahunAjaran {
-  id          String  @id @default(uuid())
-  kode        String  @unique // "2026/2027"
-  deskripsi   String
-  is_active   Boolean @default(false)
+  id        String  @id @default(uuid())
+  kode      String  @unique // "2026/2027"
+  deskripsi String
+  is_active Boolean @default(false)
 
-  semester    Semester[]
-  rombel      Rombel[]
+  semester Semester[]
+  rombel   Rombel[]
 }
 
 // ─── SEMESTER ──────────────────────────────────
 model Semester {
   id              String  @id @default(uuid())
-  nama            String  // "Semester Ganjil" / "Semester Genap"
+  nama            String // "Semester Ganjil" / "Semester Genap"
   tahun_ajaran_id String
   is_active       Boolean @default(false)
 
-  tahun_ajaran TahunAjaran @relation(fields: [tahun_ajaran_id], references: [id], onDelete: Cascade)
-  nilai        Nilai[]
+  tahun_ajaran     TahunAjaran       @relation(fields: [tahun_ajaran_id], references: [id], onDelete: Cascade)
+  jadwal_pelajaran JadwalPelajaran[]
+  jurnal_mengajar  JurnalMengajar[]
+  nilai            Nilai[]
   catatan_akademik CatatanAkademik[]
-  kehadiran    Kehadiran[]
+  kehadiran        Kehadiran[]
 
   @@unique([nama, tahun_ajaran_id])
 }
@@ -222,16 +224,17 @@ model RuangKelas {
 
 // ─── MASTER KELAS ──────────────────────────────
 model MasterKelas {
-  id              String @id @default(uuid())
-  nama            String // "X IPA 1"
-  tingkat         String // "Kelas 10", "Kelas 11", "Kelas 12"
-  wali_kelas_id   String?
-  ruang_kelas_id  String?
+  id             String  @id @default(uuid())
+  nama           String // "X IPA 1"
+  tingkat        String // "Kelas 10", "Kelas 11", "Kelas 12"
+  wali_kelas_id  String?
+  ruang_kelas_id String?
 
-  wali_kelas  User?       @relation("WaliKelasRelation", fields: [wali_kelas_id], references: [id], onDelete: SetNull)
-  ruang_kelas RuangKelas? @relation(fields: [ruang_kelas_id], references: [id], onDelete: SetNull)
-  rombel      Rombel[]
-  jadwal      JadwalPelajaran[]
+  wali_kelas       User?             @relation("WaliKelasRelation", fields: [wali_kelas_id], references: [id], onDelete: SetNull)
+  ruang_kelas      RuangKelas?       @relation(fields: [ruang_kelas_id], references: [id], onDelete: SetNull)
+  rombel           Rombel[]
+  jadwal           JadwalPelajaran[]
+  guru_mapel_kelas GuruMapelKelas[]
 
   @@unique([nama, tingkat])
 }
@@ -241,7 +244,7 @@ model MataPelajaran {
   id        String  @id @default(uuid())
   kode      String  @unique // "MTK-01"
   nama      String
-  kategori  String  // "Wajib" | "Peminatan" | "Muatan Lokal" | "Ekstrakurikuler"
+  kategori  String // "Wajib" | "Peminatan" | "Muatan Lokal" | "Ekstrakurikuler"
   kkm       Int     @default(75)
   deskripsi String?
 
@@ -258,25 +261,39 @@ model GuruMapel {
   kelas_diampu      String // Comma-separated: "X IPA 1, X IPA 2"
   jam_per_minggu    Int    @default(0)
 
-  guru           User          @relation(fields: [guru_id], references: [id], onDelete: Cascade)
-  mata_pelajaran MataPelajaran @relation(fields: [mata_pelajaran_id], references: [id], onDelete: Cascade)
+  guru           User             @relation(fields: [guru_id], references: [id], onDelete: Cascade)
+  mata_pelajaran MataPelajaran    @relation(fields: [mata_pelajaran_id], references: [id], onDelete: Cascade)
+  kelas_relasi   GuruMapelKelas[]
 
   @@unique([guru_id, mata_pelajaran_id])
 }
 
+// ─── GURU-MAPEL ↔ KELAS (Pivot) ────────────────
+model GuruMapelKelas {
+  id              String @id @default(uuid())
+  guru_mapel_id   String
+  master_kelas_id String
+
+  guru_mapel   GuruMapel   @relation(fields: [guru_mapel_id], references: [id], onDelete: Cascade)
+  master_kelas MasterKelas @relation(fields: [master_kelas_id], references: [id], onDelete: Cascade)
+
+  @@unique([guru_mapel_id, master_kelas_id])
+  @@index([master_kelas_id])
+}
+
 // ─── ROMBONGAN BELAJAR ─────────────────────────
 model Rombel {
-  id              String @id @default(uuid())
+  id              String  @id @default(uuid())
   master_kelas_id String
   tahun_ajaran_id String
   wali_kelas_id   String?
   ruang_kelas_id  String?
   is_locked       Boolean @default(false)
 
-  master_kelas MasterKelas  @relation(fields: [master_kelas_id], references: [id], onDelete: Cascade)
-  tahun_ajaran TahunAjaran  @relation(fields: [tahun_ajaran_id], references: [id], onDelete: Cascade)
-  wali_kelas   User?        @relation("WaliKelasRombelRelation", fields: [wali_kelas_id], references: [id], onDelete: SetNull)
-  ruang_kelas  RuangKelas?  @relation(fields: [ruang_kelas_id], references: [id], onDelete: SetNull)
+  master_kelas MasterKelas @relation(fields: [master_kelas_id], references: [id], onDelete: Cascade)
+  tahun_ajaran TahunAjaran @relation(fields: [tahun_ajaran_id], references: [id], onDelete: Cascade)
+  wali_kelas   User?       @relation("WaliKelasRombelRelation", fields: [wali_kelas_id], references: [id], onDelete: SetNull)
+  ruang_kelas  RuangKelas? @relation(fields: [ruang_kelas_id], references: [id], onDelete: SetNull)
 
   siswa RombelSiswa[]
 
@@ -285,7 +302,7 @@ model Rombel {
 
 // ─── ROMBEL ↔ SISWA (Many-to-Many) ─────────────
 model RombelSiswa {
-  id             String @id @default(uuid())
+  id             String  @id @default(uuid())
   rombel_id      String
   siswa_id       String
   status_promosi String? // "NAIK" or "TINGGAL" or null
@@ -298,18 +315,20 @@ model RombelSiswa {
 
 // ─── JADWAL PELAJARAN ──────────────────────────
 model JadwalPelajaran {
-  id                String @id @default(uuid())
+  id                String  @id @default(uuid())
   master_kelas_id   String
   mata_pelajaran_id String
   guru_id           String
+  semester_id       String
   ruang_kelas_id    String?
   hari              String // "Senin" | "Selasa" | "Rabu" | "Kamis" | "Jumat"
   jam_mulai         String // "07:00"
   jam_selesai       String // "07:45"
-  slot_index        Int    @default(0) // untuk urutan di grid
+  slot_index        Int     @default(0) // untuk urutan di grid
 
   master_kelas   MasterKelas   @relation(fields: [master_kelas_id], references: [id], onDelete: Cascade)
   mata_pelajaran MataPelajaran @relation(fields: [mata_pelajaran_id], references: [id], onDelete: Cascade)
+  semester       Semester      @relation(fields: [semester_id], references: [id], onDelete: Cascade)
   ruang_kelas    RuangKelas?   @relation(fields: [ruang_kelas_id], references: [id], onDelete: SetNull)
   guru           User          @relation(fields: [guru_id], references: [id], onDelete: Cascade)
 
@@ -318,17 +337,17 @@ model JadwalPelajaran {
   sesi_absensi    SesiAbsensi[]
 
   // Satu kelas tidak boleh memiliki 2 jadwal di hari & slot yang sama
-  @@unique([master_kelas_id, hari, slot_index])
+  @@unique([semester_id, master_kelas_id, hari, slot_index])
 }
 
 // ─── KEHADIRAN / PRESENSI ──────────────────────
 model Kehadiran {
-  id         String  @id @default(uuid())
-  siswa_id   String
-  jadwal_id  String
-  tanggal    String  // "2026-04-16"
-  status     String  // "HADIR" | "SAKIT" | "IZIN" | "ALPA"
-  keterangan String?
+  id           String  @id @default(uuid())
+  siswa_id     String
+  jadwal_id    String
+  tanggal      String // "2026-04-16"
+  status       String // "HADIR" | "SAKIT" | "IZIN" | "ALPA"
+  keterangan   String?
   pertemuan_ke Int?
   topik        String?
   qr_token     String?
@@ -371,35 +390,37 @@ model Nilai {
 
 // ─── KONTEN PUBLIK (CMS) ──────────────────────
 model KontenPublik {
-  id          String   @id @default(uuid())
-  tipe        String   // "HERO" | "BERITA" | "PRESTASI" | "VIDEO"
-  judul       String
-  konten      String?  // Body text / description
-  gambar_url  String?  // Image URL
-  video_url   String?  // YouTube/embed URL
-  urutan      Int      @default(0)
-  is_active   Boolean  @default(true)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
+  id         String   @id @default(uuid())
+  tipe       String // "HERO" | "BERITA" | "PRESTASI" | "VIDEO"
+  judul      String
+  konten     String? // Body text / description
+  gambar_url String? // Image URL
+  video_url  String? // YouTube/embed URL
+  urutan     Int      @default(0)
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }
 
 // ─── JURNAL MENGAJAR ──────────────────────────
 model JurnalMengajar {
-  id                String   @id @default(uuid())
-  jadwal_id         String
-  guru_id           String
-  tanggal           String   // "2026-04-16"
-  pertemuan_ke      Int
-  judul_materi      String
+  id                 String   @id @default(uuid())
+  jadwal_id          String
+  semester_id        String
+  guru_id            String
+  tanggal            String // "2026-04-16"
+  pertemuan_ke       Int
+  judul_materi       String
   deskripsi_kegiatan String?
-  created_at        DateTime @default(now())
+  created_at         DateTime @default(now())
 
-  jadwal JadwalPelajaran @relation(fields: [jadwal_id], references: [id], onDelete: Cascade)
-  guru   User            @relation(fields: [guru_id], references: [id], onDelete: Cascade)
+  jadwal   JadwalPelajaran @relation(fields: [jadwal_id], references: [id], onDelete: Cascade)
+  semester Semester        @relation(fields: [semester_id], references: [id], onDelete: Cascade)
+  guru     User            @relation(fields: [guru_id], references: [id], onDelete: Cascade)
 
   // Satu jadwal hanya bisa punya satu jurnal untuk setiap nomor pertemuan.
   // Beberapa jurnal boleh dibuat pada tanggal yang sama untuk mengisi pertemuan tertinggal.
-  @@unique([jadwal_id, pertemuan_ke])
+  @@unique([jadwal_id, semester_id, pertemuan_ke])
 }
 
 // ─── CATATAN AKADEMIK ─────────────────────────
@@ -412,24 +433,24 @@ model CatatanAkademik {
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
-  siswa     User     @relation("CatatanSiswaRelation", fields: [siswa_id], references: [id], onDelete: Cascade)
-  semester  Semester @relation(fields: [semester_id], references: [id], onDelete: Cascade)
-  wali_kelas User   @relation("CatatanWaliRelation", fields: [wali_kelas_id], references: [id], onDelete: Cascade)
+  siswa      User     @relation("CatatanSiswaRelation", fields: [siswa_id], references: [id], onDelete: Cascade)
+  semester   Semester @relation(fields: [semester_id], references: [id], onDelete: Cascade)
+  wali_kelas User     @relation("CatatanWaliRelation", fields: [wali_kelas_id], references: [id], onDelete: Cascade)
 
   @@unique([siswa_id, semester_id])
 }
 
 // ─── SESI ABSENSI QR ──────────────────────────
 model SesiAbsensi {
-  id              String   @id @default(uuid())
-  jadwal_id       String
-  guru_id         String
-  tanggal         String   // "2026-04-29"
-  pertemuan_ke    Int
-  token           String   @unique
-  expired_at      DateTime
-  is_active       Boolean  @default(true)
-  created_at      DateTime @default(now())
+  id           String   @id @default(uuid())
+  jadwal_id    String
+  guru_id      String
+  tanggal      String // "2026-04-29"
+  pertemuan_ke Int
+  token        String   @unique
+  expired_at   DateTime
+  is_active    Boolean  @default(true)
+  created_at   DateTime @default(now())
 
   jadwal JadwalPelajaran @relation(fields: [jadwal_id], references: [id], onDelete: Cascade)
 

@@ -11,28 +11,95 @@ const parseClasses = (classes = '') =>
     .map((item) => item.trim())
     .filter(Boolean);
 
+const uniq = (values = []) => [...new Set(values.filter(Boolean).map((value) => `${value}`.trim()).filter(Boolean))];
+
 const normalizeClasses = (classes = '') => [...new Set(parseClasses(classes))].join(', ');
 
-const getMasterKelasIdsByNames = async (classes) => {
-  const classNames = parseClasses(classes);
-  if (classNames.length === 0) return [];
-
+const getMasterKelasLookup = async () => {
   const rows = await prisma.masterKelas.findMany({
-    where: { nama: { in: classNames } },
+    select: { id: true, nama: true },
+  });
+
+  const byId = new Map();
+  const byName = new Map();
+  rows.forEach((row) => {
+    byId.set(row.id, row.nama);
+    byName.set(row.nama, row.id);
+  });
+
+  return { byId, byName };
+};
+
+const resolveGuruMapelKelas = async ({ masterKelasIds, classes }) => {
+  const lookup = await getMasterKelasLookup();
+  const requestedIds = Array.isArray(masterKelasIds) ? uniq(masterKelasIds) : [];
+
+  if (requestedIds.length > 0) {
+    const missing = requestedIds.filter((id) => !lookup.byId.has(id));
+    if (missing.length > 0) {
+      return {
+        error: `Beberapa kelas tidak ditemukan: ${missing.join(', ')}`,
+      };
+    }
+
+    return {
+      lookup,
+      masterKelasIds: requestedIds,
+      masterKelasNames: requestedIds.map((id) => lookup.byId.get(id)).filter(Boolean),
+    };
+  }
+
+  const classNames = parseClasses(classes);
+  if (classNames.length === 0) {
+    return {
+      error: 'Minimal satu kelas yang diampu wajib dipilih',
+    };
+  }
+
+  const missing = classNames.filter((name) => !lookup.byName.has(name));
+  if (missing.length > 0) {
+    return {
+      error: `Beberapa kelas tidak ditemukan: ${missing.join(', ')}`,
+    };
+  }
+
+  return {
+    lookup,
+    masterKelasIds: classNames.map((name) => lookup.byName.get(name)).filter(Boolean),
+    masterKelasNames: classNames,
+  };
+};
+
+const getMappingClassIds = (mapping, lookup = null) => {
+  const pivotIds = (mapping.kelas_relasi || [])
+    .map((item) => item.master_kelas_id)
+    .filter(Boolean);
+  if (pivotIds.length > 0) return pivotIds;
+
+  if (!lookup) return [];
+  return parseClasses(mapping.kelas_diampu)
+    .map((name) => lookup.byName.get(name))
+    .filter(Boolean);
+};
+
+const syncSchedulesForMapping = async ({
+  client = prisma,
+  teacherId,
+  subjectId,
+  masterKelasIds,
+}) => {
+  if (!teacherId || !subjectId || !masterKelasIds || masterKelasIds.length === 0) {
+    return { count: 0 };
+  }
+
+  const activeSemester = await client.semester.findFirst({
+    where: { is_active: true },
     select: { id: true },
   });
 
-  return rows.map((row) => row.id);
-};
-
-const syncSchedulesForMapping = async ({ teacherId, subjectId, classes }) => {
-  if (!teacherId || !subjectId) return { count: 0 };
-
-  const masterKelasIds = await getMasterKelasIdsByNames(classes);
-  if (masterKelasIds.length === 0) return { count: 0 };
-
-  return prisma.jadwalPelajaran.updateMany({
+  return client.jadwalPelajaran.updateMany({
     where: {
+      ...(activeSemester ? { semester_id: activeSemester.id } : {}),
       mata_pelajaran_id: subjectId,
       master_kelas_id: { in: masterKelasIds },
     },
@@ -40,9 +107,13 @@ const syncSchedulesForMapping = async ({ teacherId, subjectId, classes }) => {
   });
 };
 
-const findClassSubjectConflicts = async ({ subjectId, classes, excludeId = null }) => {
-  const selectedClasses = parseClasses(classes);
-  if (!subjectId || selectedClasses.length === 0) return [];
+const findClassSubjectConflicts = async ({
+  subjectId,
+  masterKelasIds,
+  excludeId = null,
+  lookup = null,
+}) => {
+  if (!subjectId || !masterKelasIds || masterKelasIds.length === 0) return [];
 
   const existingMappings = await prisma.guruMapel.findMany({
     where: {
@@ -52,16 +123,22 @@ const findClassSubjectConflicts = async ({ subjectId, classes, excludeId = null 
     include: {
       guru: { select: { nama_lengkap: true } },
       mata_pelajaran: { select: { nama: true } },
+      kelas_relasi: {
+        select: {
+          master_kelas_id: true,
+          master_kelas: { select: { nama: true } },
+        },
+      },
     },
   });
 
   const conflicts = [];
   for (const mapping of existingMappings) {
-    const existingClasses = parseClasses(mapping.kelas_diampu);
-    const overlap = selectedClasses.filter((className) => existingClasses.includes(className));
-    overlap.forEach((className) => {
+    const existingClassIds = getMappingClassIds(mapping, lookup);
+    const overlap = masterKelasIds.filter((classId) => existingClassIds.includes(classId));
+    overlap.forEach((classId) => {
       conflicts.push({
-        className,
+        className: lookup?.byId.get(classId) || mapping.kelas_relasi?.find((rel) => rel.master_kelas_id === classId)?.master_kelas?.nama || '-',
         subject: mapping.mata_pelajaran?.nama || 'Mata Pelajaran',
         teacher: mapping.guru?.nama_lengkap || 'Guru lain',
       });
@@ -101,6 +178,12 @@ const getAll = async (req, res) => {
       include: {
         guru: { select: { id: true, nama_lengkap: true } },
         mata_pelajaran: { select: { id: true, nama: true } },
+        kelas_relasi: {
+          select: {
+            master_kelas_id: true,
+            master_kelas: { select: { id: true, nama: true } },
+          },
+        },
       },
       orderBy: { guru: { nama_lengkap: 'asc' } },
     });
@@ -137,7 +220,11 @@ const getAll = async (req, res) => {
         teacherId: d.guru_id,
         subject: d.mata_pelajaran.nama,
         subjectId: d.mata_pelajaran_id,
-        classes: d.kelas_diampu || '-',   // selalu dari field manual (kelas_diampu)
+        masterKelasIds: d.kelas_relasi?.map((item) => item.master_kelas_id) || [],
+        classes:
+          d.kelas_relasi?.map((item) => item.master_kelas?.nama).filter(Boolean).join(', ') ||
+          d.kelas_diampu ||
+          '-',
         hoursPerWeek: d.jam_per_minggu,
         scheduled: countMap[d.guru_id] || 0, // dihitung dari jadwal aktif
       })),
@@ -150,38 +237,56 @@ const getAll = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { teacherId, subjectId, classes, hoursPerWeek } = req.body;
+    const { teacherId, subjectId, classes, masterKelasIds, hoursPerWeek } = req.body;
     if (!teacherId || !subjectId) {
       return res.status(400).json({ message: 'Guru dan mata pelajaran wajib diisi' });
     }
-    const normalizedClasses = normalizeClasses(classes);
-    if (!normalizedClasses) {
-      return res.status(400).json({ message: 'Minimal satu kelas yang diampu wajib dipilih' });
+    const resolved = await resolveGuruMapelKelas({ masterKelasIds, classes });
+    if (resolved.error) {
+      return res.status(400).json({ message: resolved.error });
     }
 
     const conflicts = await findClassSubjectConflicts({
       subjectId,
-      classes: normalizedClasses,
+      masterKelasIds: resolved.masterKelasIds,
+      lookup: resolved.lookup,
     });
     if (conflicts.length > 0) return sendConflictResponse(res, conflicts);
 
-    const data = await prisma.guruMapel.create({
-      data: {
-        guru_id: teacherId,
-        mata_pelajaran_id: subjectId,
-        kelas_diampu: normalizedClasses,
-        jam_per_minggu: parseInt(hoursPerWeek) || 0,
-      },
-      include: {
-        guru: { select: { nama_lengkap: true } },
-        mata_pelajaran: { select: { nama: true } },
-      },
+    const result = await prisma.$transaction(async (tx) => {
+      const data = await tx.guruMapel.create({
+        data: {
+          guru_id: teacherId,
+          mata_pelajaran_id: subjectId,
+          kelas_diampu: resolved.masterKelasNames.join(', '),
+          jam_per_minggu: parseInt(hoursPerWeek) || 0,
+        },
+        include: {
+          guru: { select: { nama_lengkap: true } },
+          mata_pelajaran: { select: { nama: true } },
+        },
+      });
+
+      if (resolved.masterKelasIds.length > 0) {
+        await tx.guruMapelKelas.createMany({
+          data: resolved.masterKelasIds.map((masterKelasId) => ({
+            guru_mapel_id: data.id,
+            master_kelas_id: masterKelasId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      const syncedSchedules = await syncSchedulesForMapping({
+        client: tx,
+        teacherId,
+        subjectId,
+        masterKelasIds: resolved.masterKelasIds,
+      });
+
+      return { data, syncedSchedules };
     });
-    const syncedSchedules = await syncSchedulesForMapping({
-      teacherId,
-      subjectId,
-      classes: normalizedClasses,
-    });
+    const { data, syncedSchedules } = result;
 
     return res.status(201).json({
       message: 'Pemetaan guru-mapel berhasil ditambahkan',
@@ -189,7 +294,8 @@ const create = async (req, res) => {
         id: data.id,
         teacher: data.guru.nama_lengkap,
         subject: data.mata_pelajaran.nama,
-        classes: data.kelas_diampu,
+        masterKelasIds: resolved.masterKelasIds,
+        classes: resolved.masterKelasNames.join(', '),
         hoursPerWeek: data.jam_per_minggu,
         syncedSchedules: syncedSchedules.count,
       },
@@ -202,53 +308,87 @@ const create = async (req, res) => {
 
 const update = async (req, res) => {
   try {
-    const { teacherId, subjectId, classes, hoursPerWeek } = req.body;
-    const existing = await prisma.guruMapel.findUnique({ where: { id: req.params.id } });
+    const { teacherId, subjectId, classes, masterKelasIds, hoursPerWeek } = req.body;
+    const existing = await prisma.guruMapel.findUnique({
+      where: { id: req.params.id },
+      include: {
+        kelas_relasi: {
+          select: {
+            master_kelas_id: true,
+            master_kelas: { select: { nama: true } },
+          },
+        },
+      },
+    });
     if (!existing) {
       return res.status(404).json({ message: 'Pemetaan guru-mapel tidak ditemukan' });
     }
 
     const nextSubjectId = subjectId || existing.mata_pelajaran_id;
     const nextTeacherId = teacherId || existing.guru_id;
-    const nextClasses = classes !== undefined
-      ? normalizeClasses(classes)
-      : normalizeClasses(existing.kelas_diampu);
-    if (!nextClasses) {
-      return res.status(400).json({ message: 'Minimal satu kelas yang diampu wajib dipilih' });
+    const resolved = await resolveGuruMapelKelas({
+      masterKelasIds,
+      classes: classes !== undefined ? classes : existing.kelas_diampu,
+    });
+    if (resolved.error) {
+      return res.status(400).json({ message: resolved.error });
     }
 
     const conflicts = await findClassSubjectConflicts({
       subjectId: nextSubjectId,
-      classes: nextClasses,
+      masterKelasIds: resolved.masterKelasIds,
       excludeId: req.params.id,
+      lookup: resolved.lookup,
     });
     if (conflicts.length > 0) return sendConflictResponse(res, conflicts);
 
-    const data = await prisma.guruMapel.update({
-      where: { id: req.params.id },
-      data: {
-        guru_id: nextTeacherId,
-        mata_pelajaran_id: nextSubjectId,
-        kelas_diampu: nextClasses,
-        ...(hoursPerWeek !== undefined && { jam_per_minggu: parseInt(hoursPerWeek) }),
-      },
-      include: {
-        guru: { select: { nama_lengkap: true } },
-        mata_pelajaran: { select: { nama: true } },
-      },
+    const result = await prisma.$transaction(async (tx) => {
+      const data = await tx.guruMapel.update({
+        where: { id: req.params.id },
+        data: {
+          guru_id: nextTeacherId,
+          mata_pelajaran_id: nextSubjectId,
+          kelas_diampu: resolved.masterKelasNames.join(', '),
+          ...(hoursPerWeek !== undefined && { jam_per_minggu: parseInt(hoursPerWeek) }),
+        },
+        include: {
+          guru: { select: { nama_lengkap: true } },
+          mata_pelajaran: { select: { nama: true } },
+        },
+      });
+
+      await tx.guruMapelKelas.deleteMany({
+        where: { guru_mapel_id: req.params.id },
+      });
+
+      if (resolved.masterKelasIds.length > 0) {
+        await tx.guruMapelKelas.createMany({
+          data: resolved.masterKelasIds.map((masterKelasId) => ({
+            guru_mapel_id: req.params.id,
+            master_kelas_id: masterKelasId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      const syncedSchedules = await syncSchedulesForMapping({
+        client: tx,
+        teacherId: nextTeacherId,
+        subjectId: nextSubjectId,
+        masterKelasIds: resolved.masterKelasIds,
+      });
+
+      return { data, syncedSchedules };
     });
-    const syncedSchedules = await syncSchedulesForMapping({
-      teacherId: nextTeacherId,
-      subjectId: nextSubjectId,
-      classes: nextClasses,
-    });
+    const { data, syncedSchedules } = result;
     return res.status(200).json({
       message: 'Pemetaan guru-mapel berhasil diperbarui',
       data: {
         id: data.id,
         teacher: data.guru.nama_lengkap,
         subject: data.mata_pelajaran.nama,
-        classes: data.kelas_diampu,
+        masterKelasIds: resolved.masterKelasIds,
+        classes: resolved.masterKelasNames.join(', '),
         hoursPerWeek: data.jam_per_minggu,
         syncedSchedules: syncedSchedules.count,
       },
