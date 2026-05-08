@@ -15,6 +15,8 @@ Backend ini dibangun di atas arsitektur Node.js dan Express, menggunakan ORM Pri
 - **Penilaian & E-Rapor:** Input nilai terpusat dengan dukungan generasi E-Rapor format PDF otomatis (menggunakan `pdfkit`). Penentuan status naik/tinggal kelas otomatis.
 - **CMS (Content Management System) Publik:** Layanan manajemen konten dinamis untuk Berita, Prestasi, dan Video Profil yang ditampilkan di Portal Tamu (*Guest*).
 - **Import Data Massal:** Dukungan untuk impor data Siswa, Guru, dan Nilai dalam jumlah besar melalui format CSV/Excel.
+- **Security & Audit System:** Tracking aktivitas pengguna melalui *Audit Logs* dan *Security Events*. Manajemen sesi aman dengan *JWT Refresh Tokens* dan *Session Versioning*.
+- **Dynamic QR Attendance:** Sistem absensi real-time berbasis token QR yang berubah secara dinamis untuk mencegah kecurangan.
 
 ---
 
@@ -22,11 +24,12 @@ Backend ini dibangun di atas arsitektur Node.js dan Express, menggunakan ORM Pri
 
 - **Runtime:** [Node.js](https://nodejs.org/)
 - **Web Framework:** [Express.js](https://expressjs.com/)
-- **Database:** [PostgreSQL](https://www.postgresql.org/)
+- **Database:** [PostgreSQL](https://www.postgresql.org/) (Compatible with Supabase/Railway)
 - **ORM:** [Prisma](https://www.prisma.io/)
+- **Media Management:** [Cloudinary](https://cloudinary.com/) (Aset Gambar & Profil)
 - **PDF Generation:** [PDFKit](https://pdfkit.org/)
 - **File Uploads:** [Multer](https://www.npmjs.com/package/multer)
-- **Security:** `bcrypt` (Hashing), `jsonwebtoken` (Auth Tokens), CORS, Express Rate Limiter, Data Sanitization.
+- **Security:** `bcrypt` (Hashing), `jsonwebtoken` (Auth Tokens), CORS, Express Rate Limiter, Helmet (Security Headers).
 
 Arsitektur aplikasi menggunakan pola desain MVC yang disempurnakan dengan *Middleware-first approach* untuk memastikan sanitasi, validasi, dan otorisasi API terpusat secara konsisten di direktori `src/middlewares/`.
 
@@ -55,11 +58,17 @@ Buat file bernama `.env` di direktori *root* (sejajar dengan `package.json`). Co
 ```env
 # Koneksi PostgreSQL (Sesuaikan credential Anda)
 DATABASE_URL="postgresql://user:password@localhost:5432/siakad_db?schema=public"
+DIRECT_URL="postgresql://user:password@localhost:5432/siakad_db?schema=public"
 
 # Konfigurasi Token Auth
 JWT_SECRET="rahasia_super_aman_anda"
 ACCESS_TOKEN_EXPIRES_IN="1h"
 REFRESH_TOKEN_EXPIRES_DAYS=30
+
+# Konfigurasi Cloudinary (Opsional untuk fitur Upload)
+CLOUDINARY_CLOUD_NAME="your_name"
+CLOUDINARY_API_KEY="your_key"
+CLOUDINARY_API_SECRET="your_secret"
 
 # Konfigurasi Port Server
 PORT=3001
@@ -72,9 +81,15 @@ npx prisma generate
 npx prisma migrate dev --name init
 ```
 
-*(Opsional)* Jalankan proses *seeding* untuk mengisi database dengan data dasar (contoh: Master Role, Tahun Ajaran Default):
+*(Opsional)* Jalankan proses *seeding* untuk mengisi database dengan data dasar atau data uji:
 ```bash
+# Seed Master Data (Role, User Awal)
 npx prisma db seed
+
+# Seed Data Spesifik (Opsional)
+npm run seed:jurnal         # Mengisi data contoh Jurnal Mengajar
+npm run seed:data-xi1      # Mengisi data master kelas XI-1
+npm run seed:kehadiran-x1  # Mengisi data kehadiran kelas X-1
 ```
 
 ### 5. Menjalankan Server
