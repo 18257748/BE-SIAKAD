@@ -4,55 +4,30 @@
 // Catches async errors & Prisma errors gracefully
 // ═══════════════════════════════════════════════
 
-/**
- * Async Handler Wrapper
- * 
- * Wraps async controller functions so they don't need
- * individual try/catch blocks. Errors are passed to
- * the global error handler.
- * 
- * Usage:
- *   router.get('/', asyncHandler(myController.getAll));
- * 
- * Instead of writing try/catch in every controller,
- * this wrapper catches any thrown/rejected error and
- * forwards it to Express error handler.
- */
-const asyncHandler = (fn) => {
-  return (req, res, next) => {
-    Promise.resolve(fn(req, res, next)).catch(next);
-  };
-};
+const { asyncHandler } = require('../shared/http/asyncHandler');
+const { buildMeta } = require('../shared/http/response');
+const AppError = require('../shared/errors/AppError');
+const { mapPrismaError } = require('../shared/errors/prismaErrorMapper');
 
-/**
- * Prisma Error Mapper
- * 
- * Maps Prisma-specific error codes to user-friendly
- * HTTP responses.
- */
-const prismaErrorMap = {
-  P2002: {
-    status: 409,
-    getMessage: (meta) => {
-      const fields = meta?.target?.join(', ') || 'field';
-      return `Data dengan ${fields} yang sama sudah ada (duplikasi)`;
+const sendError = (res, err) => {
+  const statusCode = err.statusCode || err.status || 500;
+  const code = statusCode === 500 && !err.isOperational
+    ? 'INTERNAL_SERVER_ERROR'
+    : err.code || (statusCode === 500 ? 'INTERNAL_SERVER_ERROR' : 'BAD_REQUEST');
+  const message = statusCode === 500 && !err.isOperational
+    ? 'Terjadi kesalahan internal pada server'
+    : err.message || 'Terjadi kesalahan';
+
+  return res.status(statusCode).json({
+    success: false,
+    message,
+    error: {
+      code,
+      details: err.details || null,
+      fields: err.fields || null,
     },
-  },
-  P2003: {
-    status: 400,
-    getMessage: (meta) => {
-      const field = meta?.field_name || 'referensi';
-      return `Referensi ${field} tidak valid. Data terkait tidak ditemukan`;
-    },
-  },
-  P2025: {
-    status: 404,
-    getMessage: () => 'Data yang diminta tidak ditemukan',
-  },
-  P2014: {
-    status: 400,
-    getMessage: () => 'Operasi tidak dapat dilakukan karena ada data terkait yang bergantung',
-  },
+    meta: buildMeta(res),
+  });
 };
 
 /**
@@ -73,54 +48,50 @@ const globalErrorHandler = (err, req, res, next) => {
   // Log the error
   console.error(`\n  ❌ Error [${req.method} ${req.originalUrl}]:`, err.message || err);
 
-  // A. Prisma Known Errors
-  if (err.code && prismaErrorMap[err.code]) {
-    const mapped = prismaErrorMap[err.code];
-    return res.status(mapped.status).json({
-      message: mapped.getMessage(err.meta),
-    });
+  const mappedPrismaError = mapPrismaError(err);
+  if (mappedPrismaError) {
+    return sendError(res, mappedPrismaError);
   }
 
-  // B. Prisma Validation Error
   if (err.name === 'PrismaClientValidationError') {
-    return res.status(400).json({
-      message: 'Data yang dikirim tidak sesuai format yang diharapkan',
-    });
+    return sendError(res, new AppError('Data yang dikirim tidak sesuai format yang diharapkan', {
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+    }));
   }
 
-  // C. JSON Parse Error (malformed body)
   if (err.type === 'entity.parse.failed') {
-    return res.status(400).json({
-      message: 'Format JSON tidak valid',
-    });
+    return sendError(res, new AppError('Format JSON tidak valid', {
+      statusCode: 400,
+      code: 'BAD_REQUEST',
+    }));
   }
 
-  // D. JWT Errors
   if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      message: 'Token tidak valid',
-    });
+    return sendError(res, new AppError('Token tidak valid', {
+      statusCode: 401,
+      code: 'UNAUTHORIZED',
+    }));
   }
   if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      message: 'Token sudah kadaluarsa. Silakan login kembali.',
-    });
+    return sendError(res, new AppError('Token sudah kadaluarsa. Silakan login kembali.', {
+      statusCode: 401,
+      code: 'UNAUTHORIZED',
+    }));
   }
 
-  // E. Payload Too Large
   if (err.type === 'entity.too.large') {
-    return res.status(413).json({
-      message: 'Ukuran data terlalu besar. Maksimal 10MB.',
-    });
+    return sendError(res, new AppError('Ukuran data terlalu besar. Maksimal 10MB.', {
+      statusCode: 413,
+      code: 'BAD_REQUEST',
+    }));
   }
 
-  // F. Generic Server Error
-  const statusCode = err.statusCode || err.status || 500;
-  return res.status(statusCode).json({
-    message: statusCode === 500
-      ? 'Terjadi kesalahan internal pada server'
-      : err.message || 'Terjadi kesalahan',
-  });
+  if (err instanceof AppError || err.statusCode || err.status) {
+    return sendError(res, err);
+  }
+
+  return sendError(res, new AppError('Terjadi kesalahan internal pada server'));
 };
 
 /**
@@ -130,9 +101,10 @@ const globalErrorHandler = (err, req, res, next) => {
  * Should be placed AFTER all route definitions.
  */
 const notFoundHandler = (req, res) => {
-  return res.status(404).json({
-    message: `Route ${req.method} ${req.originalUrl} tidak ditemukan`,
-  });
+  return sendError(res, new AppError(`Route ${req.method} ${req.originalUrl} tidak ditemukan`, {
+    statusCode: 404,
+    code: 'NOT_FOUND',
+  }));
 };
 
-module.exports = { asyncHandler, globalErrorHandler, notFoundHandler };
+module.exports = { asyncHandler, globalErrorHandler, notFoundHandler, sendError };

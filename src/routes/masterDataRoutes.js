@@ -9,8 +9,8 @@ const express = require('express');
 const router = express.Router();
 const tahunAjaranCtrl = require('../controllers/tahunAjaranController');
 const semesterCtrl = require('../controllers/semesterController');
-const ruangKelasCtrl = require('../controllers/ruangKelasController');
 const masterKelasCtrl = require('../controllers/masterKelasController');
+const roomsRoutes = require('../modules/rooms/rooms.routes');
 const { verifyToken, authorizeRoles } = require('../middlewares/authMiddleware');
 const { requireFields, validateUUID, validateTahunAjaranCode } = require('../middlewares/validationMiddleware');
 
@@ -86,19 +86,7 @@ router.delete('/semester/:id',
 );
 
 // ── Ruang Kelas ─────────────────────────────────
-router.get('/ruang-kelas', ruangKelasCtrl.getAll);
-router.post('/ruang-kelas', 
-  requireFields('code', 'building', 'capacity'),
-  ruangKelasCtrl.create
-);
-router.put('/ruang-kelas/:id', 
-  validateUUID('id'),
-  ruangKelasCtrl.update
-);
-router.delete('/ruang-kelas/:id', 
-  validateUUID('id'),
-  ruangKelasCtrl.remove
-);
+router.use('/ruang-kelas', roomsRoutes);
 
 // ── Master Kelas ────────────────────────────────
 router.get('/master-kelas', masterKelasCtrl.getAll);
