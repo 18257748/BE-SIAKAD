@@ -140,7 +140,9 @@ describe('dashboardController.quickSession', () => {
   test('mengembalikan 409 jelas jika jurnal pertemuan sudah ada sebelum create', async () => {
     const tx = buildTx();
     mockTransaction(tx);
-    prisma.jurnalMengajar.findFirst.mockResolvedValue({ pertemuan_ke: 1 });
+    prisma.jurnalMengajar.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ pertemuan_ke: 1 });
     tx.sesiAbsensi.findFirst.mockResolvedValue(null);
     tx.jurnalMengajar.findFirst.mockResolvedValue(existingJurnal);
 
@@ -164,12 +166,49 @@ describe('dashboardController.quickSession', () => {
     expect(tx.sesiAbsensi.create).not.toHaveBeenCalled();
   });
 
+  test('membuka ulang sesi untuk jurnal yang sudah ada pada tanggal hari ini', async () => {
+    const tx = buildTx();
+    mockTransaction(tx);
+    prisma.jurnalMengajar.findFirst.mockResolvedValueOnce({ pertemuan_ke: 2 });
+    tx.sesiAbsensi.findFirst.mockResolvedValue(null);
+    tx.jurnalMengajar.findFirst.mockResolvedValue(existingJurnal);
+    tx.sesiAbsensi.updateMany.mockResolvedValue({ count: 0 });
+    tx.sesiAbsensi.create.mockResolvedValue({ id: 'session-001' });
+
+    const req = {
+      user: { userId: 'guru-001' },
+      body: { jadwalId: 'jadwal-001' },
+    };
+    const res = mockRes();
+
+    await quickSession(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(tx.jurnalMengajar.create).not.toHaveBeenCalled();
+    expect(tx.sesiAbsensi.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        jadwal_id: 'jadwal-001',
+        tanggal: '2026-05-07',
+        pertemuan_ke: 2,
+      }),
+    });
+    expect(res.body.data).toMatchObject({
+      jurnalId: 'jurnal-existing',
+      tanggal: '2026-05-07',
+      pertemuanKe: 2,
+    });
+  });
+
   test('mengubah race P2002 menjadi 409 bukan 500', async () => {
     const tx = buildTx();
     mockTransaction(tx);
     prisma.jurnalMengajar.findFirst
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
+        ...existingJurnal,
+        pertemuan_ke: 1,
+      })
+      .mockResolvedValue({
         ...existingJurnal,
         pertemuan_ke: 1,
       });

@@ -33,6 +33,36 @@ const serializeJurnal = (data) => ({
   kelas: data.jadwal?.master_kelas?.nama || '-',
 });
 
+const jurnalInclude = {
+  jadwal: {
+    include: {
+      mata_pelajaran: { select: { nama: true } },
+      master_kelas: { select: { nama: true } },
+    },
+  },
+};
+
+const findJurnalByDate = ({ jadwalId, semesterId, tanggal }) =>
+  prisma.jurnalMengajar.findFirst({
+    where: {
+      jadwal_id: jadwalId,
+      semester_id: semesterId,
+      tanggal,
+    },
+    orderBy: { created_at: 'asc' },
+    include: jurnalInclude,
+  });
+
+const findJurnalByMeeting = ({ jadwalId, semesterId, meetingNumber }) =>
+  prisma.jurnalMengajar.findFirst({
+    where: {
+      jadwal_id: jadwalId,
+      semester_id: semesterId,
+      pertemuan_ke: meetingNumber,
+    },
+    include: jurnalInclude,
+  });
+
 const createJurnalRecord = ({
   jadwalId,
   guruId,
@@ -52,14 +82,7 @@ const createJurnalRecord = ({
       judul_materi: judulMateri,
       deskripsi_kegiatan: deskripsiKegiatan || null,
     },
-    include: {
-      jadwal: {
-        include: {
-          mata_pelajaran: { select: { nama: true } },
-          master_kelas: { select: { nama: true } },
-        },
-      },
-    },
+    include: jurnalInclude,
   });
 
 /**
@@ -84,30 +107,32 @@ const create = async (req, res) => {
       return res.status(404).json({ message: 'Jadwal tidak ditemukan' });
     }
 
-    // Check if jurnal already exists for this jadwal+semester+meeting number.
-    // Multiple journals may share the same date when a teacher fills missed meetings later.
-    const existing = await prisma.jurnalMengajar.findFirst({
-      where: {
-        jadwal_id: jadwalId,
-        semester_id: jadwal.semester_id,
-        pertemuan_ke: meetingNumber,
-      },
-      include: {
-        jadwal: {
-          include: {
-            mata_pelajaran: { select: { nama: true } },
-            master_kelas: { select: { nama: true } },
-          },
-        },
-      },
+    // Attendance is keyed by meeting number. Reusing an existing journal for
+    // the same schedule/date prevents a second same-day meeting from splitting
+    // attendance history.
+    const existingByDate = await findJurnalByDate({
+      jadwalId,
+      semesterId: jadwal.semester_id,
+      tanggal,
     });
 
-    if (existing) {
+    if (existingByDate) {
+      return res.status(200).json({
+        message: 'Jurnal untuk tanggal ini sudah ada. Sesi absensi dapat dibuka kembali.',
+        data: serializeJurnal(existingByDate),
+      });
+    }
+
+    const existingByMeeting = await findJurnalByMeeting({
+      jadwalId,
+      semesterId: jadwal.semester_id,
+      meetingNumber,
+    });
+
+    if (existingByMeeting) {
       return res.status(200).json({
         message: 'Jurnal untuk pertemuan ini sudah ada. Sesi absensi dapat dibuka kembali.',
-        data: {
-          ...serializeJurnal(existing),
-        },
+        data: serializeJurnal(existingByMeeting),
       });
     }
 
@@ -132,35 +157,43 @@ const create = async (req, res) => {
       const meetingNumber = parseMeetingNumber(pertemuanKe);
       const jadwal = await getJadwalWithSemester(jadwalId);
 
-      if (
-        jadwal &&
-        target.includes('jadwal_id') &&
-        target.includes('semester_id') &&
-        target.includes('pertemuan_ke') &&
-        meetingNumber
-      ) {
-        const existing = await prisma.jurnalMengajar.findFirst({
-          where: {
-            jadwal_id: jadwalId,
-            semester_id: jadwal.semester_id,
-            pertemuan_ke: meetingNumber,
-          },
-          include: {
-            jadwal: {
-              include: {
-                mata_pelajaran: { select: { nama: true } },
-                master_kelas: { select: { nama: true } },
-              },
-            },
-          },
-        });
+      if (jadwal && target.includes('jadwal_id') && target.includes('semester_id')) {
+        const existingByDate = target.includes('tanggal')
+          ? await findJurnalByDate({
+              jadwalId,
+              semesterId: jadwal.semester_id,
+              tanggal: req.body.tanggal,
+            })
+          : null;
 
-        if (existing) {
+        if (existingByDate) {
           return res.status(200).json({
-            message: 'Jurnal untuk pertemuan ini sudah ada. Sesi absensi dapat dibuka kembali.',
-            data: serializeJurnal(existing),
+            message: 'Jurnal untuk tanggal ini sudah ada. Sesi absensi dapat dibuka kembali.',
+            data: serializeJurnal(existingByDate),
           });
         }
+
+        const existingByMeeting = target.includes('pertemuan_ke') && meetingNumber
+          ? await findJurnalByMeeting({
+              jadwalId,
+              semesterId: jadwal.semester_id,
+              meetingNumber,
+            })
+          : null;
+
+        if (existingByMeeting) {
+          return res.status(200).json({
+            message: 'Jurnal untuk pertemuan ini sudah ada. Sesi absensi dapat dibuka kembali.',
+            data: serializeJurnal(existingByMeeting),
+          });
+        }
+      }
+
+      if (target.includes('tanggal')) {
+        return res.status(409).json({
+          message: 'Jurnal untuk tanggal ini sudah ada.',
+          errorCode: 'DUPLICATE_JURNAL_DATE',
+        });
       }
 
       return res.status(409).json({

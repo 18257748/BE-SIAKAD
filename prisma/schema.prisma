@@ -419,7 +419,8 @@ model JurnalMengajar {
   guru     User            @relation(fields: [guru_id], references: [id], onDelete: Cascade)
 
   // Satu jadwal hanya bisa punya satu jurnal untuk setiap nomor pertemuan.
-  // Beberapa jurnal boleh dibuat pada tanggal yang sama untuk mengisi pertemuan tertinggal.
+  // Database migration juga memasang trigger agar satu jadwal hanya bisa punya
+  // satu jurnal per tanggal tanpa merusak data duplikat lama.
   @@unique([jadwal_id, semester_id, pertemuan_ke])
 }
 

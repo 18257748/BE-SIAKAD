@@ -90,7 +90,7 @@ describe('jurnal create for attendance session', () => {
     });
   });
 
-  test('returns existing jurnal as success so attendance QR can be reopened', async () => {
+  test('returns existing same-day jurnal as success so attendance QR can be reopened', async () => {
     prisma.jurnalMengajar.findFirst.mockResolvedValue({
       id: 'jurnal-existing',
       jadwal_id: requestBody.jadwalId,
@@ -110,7 +110,7 @@ describe('jurnal create for attendance session', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(prisma.jurnalMengajar.create).not.toHaveBeenCalled();
     expect(res.body).toMatchObject({
-      message: 'Jurnal untuk pertemuan ini sudah ada. Sesi absensi dapat dibuka kembali.',
+      message: 'Jurnal untuk tanggal ini sudah ada. Sesi absensi dapat dibuka kembali.',
       data: {
         id: 'jurnal-existing',
         jadwalId: requestBody.jadwalId,
@@ -120,14 +120,13 @@ describe('jurnal create for attendance session', () => {
     });
   });
 
-  test('allows the same date when the meeting number is different', async () => {
-    prisma.jurnalMengajar.findFirst.mockResolvedValue(null);
-    prisma.jurnalMengajar.create.mockResolvedValue({
-      id: 'jurnal-002',
+  test('reuses the existing same-day jurnal when the meeting number is different', async () => {
+    prisma.jurnalMengajar.findFirst.mockResolvedValue({
+      id: 'jurnal-existing-date',
       jadwal_id: requestBody.jadwalId,
       tanggal: requestBody.tanggal,
-      pertemuan_ke: 2,
-      judul_materi: 'Substitusi integral',
+      pertemuan_ke: 1,
+      judul_materi: requestBody.judulMateri,
       deskripsi_kegiatan: requestBody.deskripsiKegiatan,
       semester_id: 'semester-001',
       jadwal: jadwalInclude,
@@ -150,15 +149,17 @@ describe('jurnal create for attendance session', () => {
         where: {
           jadwal_id: requestBody.jadwalId,
           semester_id: 'semester-001',
-          pertemuan_ke: 2,
+          tanggal: requestBody.tanggal,
         },
       })
     );
-    expect(res.status).toHaveBeenCalledWith(201);
+    expect(prisma.jurnalMengajar.create).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.body.message).toBe('Jurnal untuk tanggal ini sudah ada. Sesi absensi dapat dibuka kembali.');
     expect(res.body.data).toMatchObject({
-      id: 'jurnal-002',
+      id: 'jurnal-existing-date',
       tanggal: requestBody.tanggal,
-      pertemuanKe: 2,
+      pertemuanKe: 1,
     });
   });
 

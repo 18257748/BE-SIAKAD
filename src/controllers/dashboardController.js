@@ -1355,13 +1355,26 @@ const quickSession = async (req, res) => {
     const now = new Date();
     const tanggal = getJakartaDateString(now);
 
-    // Auto-calculate pertemuanKe = max existing meeting number for this jadwal + 1.
-    const lastJurnal = await prisma.jurnalMengajar.findFirst({
+    const todayJurnal = await prisma.jurnalMengajar.findFirst({
+      where: {
+        jadwal_id: jadwalId,
+        semester_id: jadwal.semester_id,
+        tanggal,
+      },
+      orderBy: { created_at: 'asc' },
+      select: { pertemuan_ke: true },
+    });
+
+    // Auto-calculate pertemuanKe = max existing meeting number for this jadwal + 1,
+    // unless today's journal already exists. In that case, reopen the same meeting
+    // so attendance history for one teaching day stays in one session.
+    const lastJurnal = todayJurnal ? null : await prisma.jurnalMengajar.findFirst({
       where: { jadwal_id: jadwalId, semester_id: jadwal.semester_id },
       orderBy: { pertemuan_ke: 'desc' },
       select: { pertemuan_ke: true },
     });
-    pertemuanKe = (lastJurnal?.pertemuan_ke || 0) + 1;
+    pertemuanKe = todayJurnal?.pertemuan_ke || (lastJurnal?.pertemuan_ke || 0) + 1;
+    const shouldReuseTodayJurnal = !!todayJurnal;
 
     const result = await prisma.$transaction(async (tx) => {
       const existingJurnal = await tx.jurnalMengajar.findFirst({
@@ -1400,13 +1413,6 @@ const quickSession = async (req, res) => {
           },
           data: { is_active: false },
         });
-
-        return {
-          statusCode: 410,
-          body: {
-            message: 'Sesi QR presensi sudah ditutup',
-          },
-        };
       }
 
       if (activeSession && activeSession.expired_at && new Date(activeSession.expired_at) > now) {
@@ -1506,7 +1512,7 @@ const quickSession = async (req, res) => {
         };
       }
 
-      if (existingJurnal) {
+      if (existingJurnal && !shouldReuseTodayJurnal) {
         return {
           statusCode: 409,
           body: {
@@ -1523,7 +1529,7 @@ const quickSession = async (req, res) => {
         };
       }
 
-      const jurnal = await tx.jurnalMengajar.create({
+      const jurnal = existingJurnal || await tx.jurnalMengajar.create({
         data: {
           jadwal_id: jadwalId,
           semester_id: jadwal.semester_id,
@@ -1578,8 +1584,8 @@ const quickSession = async (req, res) => {
             sessionId: session.id,
             jurnalId: jurnal.id,
             jadwalId,
-            tanggal,
-            pertemuanKe,
+            tanggal: jurnal.tanggal || tanggal,
+            pertemuanKe: jurnal.pertemuan_ke || pertemuanKe,
             expiresIn: QR_EXPIRY_SECONDS,
             expiredAt: sessionExpiredAt.toISOString(),
             sessionExpiredAt: sessionExpiredAt.toISOString(),

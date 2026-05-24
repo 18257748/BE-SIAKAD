@@ -76,6 +76,11 @@ describe('QR attendance session', () => {
       mata_pelajaran_id: 'mapel-001',
       semester_id: 'semester-001',
     });
+    prisma.jurnalMengajar.findFirst.mockResolvedValue({
+      pertemuan_ke: 1,
+      judul_materi: 'Bab 1',
+      deskripsi_kegiatan: 'Pembuka',
+    });
   });
 
   afterEach(() => {

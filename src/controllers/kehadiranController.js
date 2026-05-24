@@ -247,6 +247,20 @@ const getSessionJournal = ({ jadwalId, tanggal, pertemuanKe }) =>
     },
   });
 
+const getJournalForDate = ({ jadwalId, tanggal }) =>
+  prisma.jurnalMengajar.findFirst({
+    where: {
+      jadwal_id: jadwalId,
+      tanggal,
+    },
+    orderBy: { created_at: 'asc' },
+    select: {
+      pertemuan_ke: true,
+      judul_materi: true,
+      deskripsi_kegiatan: true,
+    },
+  });
+
 const getActiveRombelForJadwal = async (jadwalId) => {
   const jadwal = await prisma.jadwalPelajaran.findUnique({
     where: { id: jadwalId },
@@ -345,16 +359,12 @@ const saveBatch = async (req, res) => {
 
     const [semesterId, jurnal] = await Promise.all([
       getActiveSemesterId(),
-      getSessionJournal({
-        jadwalId,
-        tanggal,
-        pertemuanKe: parseMeetingNumber(pertemuanKe),
-      }),
+      getJournalForDate({ jadwalId, tanggal }),
     ]);
-    const finalPertemuanKe = parseMeetingNumber(pertemuanKe) || jurnal?.pertemuan_ke || null;
-    if (!finalPertemuanKe) {
-      return res.status(400).json({ message: 'Pertemuan ke- wajib diisi' });
+    if (!jurnal) {
+      return res.status(400).json({ message: 'Jurnal wajib dibuat sebelum menyimpan presensi' });
     }
+    const finalPertemuanKe = jurnal.pertemuan_ke;
     const finalTopik = topik || jurnal?.judul_materi || null;
     const finalKeterangan = jurnal?.deskripsi_kegiatan || null;
 
@@ -601,7 +611,7 @@ const generateQR = async (req, res) => {
   try {
     const { jadwalId, tanggal, pertemuanKe } = req.body;
     const guruId = req.user.userId;
-    const meetingNumber = parseMeetingNumber(pertemuanKe);
+    let meetingNumber = parseMeetingNumber(pertemuanKe);
 
     if (!jadwalId || !tanggal || !meetingNumber) {
       return res.status(400).json({ message: 'jadwalId, tanggal, dan pertemuanKe wajib diisi' });
@@ -616,6 +626,12 @@ const generateQR = async (req, res) => {
     if (!jadwal) {
       return res.status(404).json({ message: 'Jadwal tidak ditemukan' });
     }
+
+    const jurnal = await getJournalForDate({ jadwalId, tanggal });
+    if (!jurnal) {
+      return res.status(400).json({ message: 'Jurnal wajib dibuat sebelum membuka sesi presensi' });
+    }
+    meetingNumber = jurnal.pertemuan_ke;
 
     const result = await openOrRefreshSession({
       jadwalId,
@@ -658,11 +674,17 @@ const refreshQR = async (req, res) => {
   try {
     const { jadwalId, tanggal, pertemuanKe } = req.body;
     const guruId = req.user.userId;
-    const meetingNumber = parseMeetingNumber(pertemuanKe);
+    let meetingNumber = parseMeetingNumber(pertemuanKe);
 
     if (!jadwalId || !tanggal || !meetingNumber) {
       return res.status(400).json({ message: 'jadwalId, tanggal, dan pertemuanKe wajib diisi' });
     }
+
+    const jurnal = await getJournalForDate({ jadwalId, tanggal });
+    if (!jurnal) {
+      return res.status(400).json({ message: 'Jurnal wajib dibuat sebelum memperbarui sesi presensi' });
+    }
+    meetingNumber = jurnal.pertemuan_ke;
 
     const result = await openOrRefreshSession({
       jadwalId,
