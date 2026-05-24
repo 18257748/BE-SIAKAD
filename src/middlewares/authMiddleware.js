@@ -156,16 +156,20 @@ const authenticateDecodedUser = async (req, res, next, decoded, source) => {
     );
   }
 
-  if (source === 'legacy') {
-    const tokenSessionVersion = decoded.sessionVersion || decoded.session_version || 1;
-    if (tokenSessionVersion !== user.session_version) {
-      return sendAuthError(
-        res,
-        401,
-        'Session sudah tidak berlaku. Silakan login kembali.',
-        'SESSION_REVOKED'
-      );
-    }
+  // SECURITY: Validate session_version for ALL token sources.
+  // When session_version is incremented (password change, force-logout),
+  // ALL outstanding tokens are immediately invalidated server-side.
+  // This check runs against the database on every request.
+  const tokenSessionVersion = decoded.sessionVersion
+    || decoded.session_version
+    || null;
+  if (tokenSessionVersion !== null && tokenSessionVersion !== user.session_version) {
+    return sendAuthError(
+      res,
+      401,
+      'Session sudah tidak berlaku. Silakan login kembali.',
+      'SESSION_REVOKED'
+    );
   }
 
   attachRequestUser(req, user, decoded, source);
