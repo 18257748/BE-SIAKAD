@@ -13,15 +13,13 @@ const { requestLogger } = require('./middlewares/requestLogger');
 const { sanitizeAll } = require('./middlewares/sanitizeMiddleware');
 const { apiLimiter } = require('./middlewares/rateLimiter');
 const { globalErrorHandler, notFoundHandler } = require('./middlewares/errorHandler');
-const { requestIdMiddleware } = require('./shared/http/requestId');
-const { sendSuccess } = require('./shared/http/response');
 
 const app = express();
+const PORT = process.env.PORT || 3001;
 
 // ─── Global Middleware (order matters!) ─────────
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(requestIdMiddleware);
 app.use(requestLogger);       // Log semua request
 app.use(sanitizeAll);          // Sanitasi XSS di body/query/params
 app.use('/api', apiLimiter);   // Rate limit seluruh API
@@ -73,13 +71,10 @@ app.use('/api/import', require('./routes/importRoutes'));
 
 // ─── Health Check ───────────────────────────────
 app.get('/api/health', (req, res) => {
-  return sendSuccess(res, {
+  res.status(200).json({ 
     message: 'SIAKAD Backend is running',
-    data: {
-      message: 'SIAKAD Backend is running',
-      version: '2.0.0',
-      timestamp: new Date().toISOString(),
-    },
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
   });
 });
 
@@ -89,4 +84,10 @@ app.use(notFoundHandler);
 // ─── Global Error Handler (MUST be last) ────────
 app.use(globalErrorHandler);
 
-module.exports = app;
+// ─── Start Server ───────────────────────────────
+app.listen(PORT, () => {
+  console.log(`\n══════════════════════════════════════`);
+  console.log(`  SIAKAD Backend v2.0 Running on port ${PORT}`);
+  console.log(`  http://localhost:${PORT}/api/health`);
+  console.log(`══════════════════════════════════════\n`);
+});
