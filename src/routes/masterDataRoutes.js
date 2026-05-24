@@ -7,31 +7,100 @@
 
 const express = require('express');
 const router = express.Router();
-const academicYearsRoutes = require('../modules/academic-years/academic-years.routes');
-const semestersRoutes = require('../modules/semesters/semesters.routes');
-const semestersController = require('../modules/semesters/semesters.controller');
+const tahunAjaranCtrl = require('../controllers/tahunAjaranController');
+const semesterCtrl = require('../controllers/semesterController');
+const masterKelasCtrl = require('../controllers/masterKelasController');
 const roomsRoutes = require('../modules/rooms/rooms.routes');
-const masterClassesRoutes = require('../modules/master-classes/master-classes.routes');
 const { verifyToken, authorizeRoles } = require('../middlewares/authMiddleware');
+const { requireFields, validateUUID, validateTahunAjaranCode } = require('../middlewares/validationMiddleware');
 
 // ── Public (authenticated) — active semester for navbar ──
 // Must be BEFORE the authorizeRoles middleware below
-router.get('/active-semester', verifyToken, semestersController.getActive);
+router.get('/active-semester', verifyToken, async (req, res) => {
+  try {
+    const prisma = require('../config/prisma');
+    const semester = await prisma.semester.findFirst({
+      where: { is_active: true },
+      include: { tahun_ajaran: true }
+    });
+    if (!semester) {
+      return res.status(200).json({ data: null, message: 'Tidak ada semester aktif' });
+    }
+    return res.status(200).json({
+      data: {
+        id: semester.id,
+        nama: semester.nama,
+        tahunAjaran: semester.tahun_ajaran?.kode || '-',
+        label: `${semester.nama} - ${semester.tahun_ajaran?.kode || '-'}`,
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ message: 'Gagal memuat semester aktif' });
+  }
+});
 
 // All routes BELOW require Admin and Kurikulum roles
-router.get('/semester', verifyToken, semestersController.getAll);
+router.get('/semester', verifyToken, semesterCtrl.getAll);
 router.use(verifyToken, authorizeRoles('Administrator', 'Kurikulum'));
 
 // ── Tahun Ajaran ────────────────────────────────
-router.use('/tahun-ajaran', academicYearsRoutes);
+router.get('/tahun-ajaran', tahunAjaranCtrl.getAll);
+router.post('/tahun-ajaran', 
+  requireFields('code', 'description'),
+  validateTahunAjaranCode,
+  tahunAjaranCtrl.create
+);
+router.put('/tahun-ajaran/:id', 
+  validateUUID('id'),
+  tahunAjaranCtrl.update
+);
+router.patch('/tahun-ajaran/:id/toggle', 
+  validateUUID('id'),
+  tahunAjaranCtrl.toggleActive
+);
+router.post('/tahun-ajaran/:id/generate-rombel',
+  validateUUID('id'),
+  tahunAjaranCtrl.generateRombel
+);
+router.delete('/tahun-ajaran/:id', 
+  validateUUID('id'),
+  tahunAjaranCtrl.remove
+);
 
 // ── Semester ────────────────────────────────────
-router.use('/semester', semestersRoutes);
+router.post('/semester', 
+  requireFields('name', 'academicYearId'),
+  semesterCtrl.create
+);
+router.put('/semester/:id', 
+  validateUUID('id'),
+  semesterCtrl.update
+);
+router.patch('/semester/:id/toggle', 
+  validateUUID('id'),
+  semesterCtrl.toggleActive
+);
+router.delete('/semester/:id', 
+  validateUUID('id'),
+  semesterCtrl.remove
+);
 
 // ── Ruang Kelas ─────────────────────────────────
 router.use('/ruang-kelas', roomsRoutes);
 
 // ── Master Kelas ────────────────────────────────
-router.use('/master-kelas', masterClassesRoutes);
+router.get('/master-kelas', masterKelasCtrl.getAll);
+router.post('/master-kelas', 
+  requireFields('name', 'grade'),
+  masterKelasCtrl.create
+);
+router.put('/master-kelas/:id', 
+  validateUUID('id'),
+  masterKelasCtrl.update
+);
+router.delete('/master-kelas/:id', 
+  validateUUID('id'),
+  masterKelasCtrl.remove
+);
 
 module.exports = router;
